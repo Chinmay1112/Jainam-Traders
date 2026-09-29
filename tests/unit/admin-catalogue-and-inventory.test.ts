@@ -367,7 +367,7 @@ describe('4. Regression: Order Flow, Reservation, Cancellation & Pickup', () => 
 describe('5. Security: Customer Role Mutation Protections', () => {
   it('enforces that customers cannot mutate stock or access admin product endpoints', async () => {
     // 1. Customer role check
-    const customerRole = 'customer';
+    const customerRole: string = 'customer';
     const isAuthorized = customerRole === 'admin' || customerRole === 'staff' || customerRole === 'owner';
     expect(isAuthorized).toBe(false);
 

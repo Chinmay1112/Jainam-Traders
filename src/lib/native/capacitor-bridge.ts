@@ -305,3 +305,11 @@ export function openDirectionsInMaps(address: string, lat: number = 19.076, lng:
     window.open(`https://maps.google.com/?q=${encoded}`, '_blank');
   }
 }
+
+// Convenient export aliases
+export const openDialer = openNativeDialer;
+export const openWhatsApp = openWhatsAppChat;
+export const openMapDirections = openDirectionsInMaps;
+export const shareNative = nativeShareProduct;
+export const checkNetworkStatus = getCurrentNetworkStatus;
+

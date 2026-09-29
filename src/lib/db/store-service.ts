@@ -337,7 +337,9 @@ export async function getAdminProducts(filter?: {
 }
 
 export async function createAdminProduct(
-  data: Omit<Product, 'id' | 'createdAt' | 'updatedAt' | 'discountPercentage'>,
+  data: Omit<Product, 'id' | 'createdAt' | 'updatedAt' | 'discountPercentage' | 'reservedStock'> & {
+    reservedStock?: number;
+  },
   actorId?: string
 ): Promise<Product> {
   if (!data.name || !data.name.trim()) throw new Error('Product name is required');

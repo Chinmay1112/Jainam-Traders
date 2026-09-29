@@ -67,8 +67,8 @@ describe('Mobile Native Bridge & Intents', () => {
 
   it('validates offline transaction block rules', () => {
     // Offline checkout policy: reservations require live stock check
-    const isOnline = false;
-    const canPlaceOrder = isOnline === true;
-    expect(canPlaceOrder).toBe(false);
+    const canPlaceOrder = (onlineStatus: boolean) => onlineStatus === true;
+    expect(canPlaceOrder(false)).toBe(false);
+    expect(canPlaceOrder(true)).toBe(true);
   });
 });
