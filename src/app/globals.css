@@ -60,3 +60,21 @@ body {
 .active-press:active {
   transform: scale(0.97);
 }
+
+/* Simple / Assisted Mode for low-literacy, elderly, and first-time smartphone users */
+html.simple-mode {
+  font-size: 110%;
+}
+
+html.simple-mode button,
+html.simple-mode a.active-press {
+  min-height: 48px;
+  font-weight: 700;
+}
+
+html.simple-mode input {
+  font-size: 1rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+

@@ -205,15 +205,90 @@ export function toCustomerProductView(product: Product): CustomerProductView {
   }
 
   // Strip exact stock numbers
-  const safeProduct: Partial<Product> = { ...product };
-  delete safeProduct.stockQuantity;
-  delete safeProduct.reservedStock;
-  delete safeProduct.lowStockThreshold;
+  const { stockQuantity: _sq, reservedStock: _rs, lowStockThreshold: _lst, ...safeProduct } = product;
+  void _sq;
+  void _rs;
+  void _lst;
 
   return {
     ...safeProduct,
     availability,
   };
+}
+
+export interface ParsedSearchQuery {
+  cleanedText: string;
+  tokens: string[];
+  inferredMaxPrice?: number;
+}
+
+export function parseSearchQuery(rawQuery: string): ParsedSearchQuery {
+  if (!rawQuery || !rawQuery.trim()) {
+    return { cleanedText: '', tokens: [] };
+  }
+
+  let text = rawQuery.toLowerCase().trim();
+
+  // 1. Detect natural budget/price phrases: e.g. "500 ke andar", "under 500", "500 tak", "less than 500"
+  let inferredMaxPrice: number | undefined;
+  const underPriceMatch =
+    text.match(/(?:under|below|less than|ke andar|ke neeche|tak|mein|me)\s*(?:rs\.?|rupees|rupaye|₹)?\s*(\d+)/i) ||
+    text.match(/(\d+)\s*(?:rs\.?|rupees|rupaye|₹)?\s*(?:ke andar|ke neeche|under|tak|mein|me)/i);
+  if (underPriceMatch && underPriceMatch[1]) {
+    const num = parseInt(underPriceMatch[1], 10);
+    if (!isNaN(num) && num > 0) {
+      inferredMaxPrice = num;
+      text = text.replace(underPriceMatch[0], ' ');
+    }
+  }
+
+  // 2. Remove conversational stop words in Hindi and English
+  const stopWords = new Set([
+    'dikhao',
+    'dikhaye',
+    'dikhado',
+    'chahiye',
+    'hai',
+    'kuch',
+    'batao',
+    'lao',
+    'ke',
+    'ki',
+    'ka',
+    'ko',
+    'se',
+    'liye',
+    'wala',
+    'wali',
+    'wale',
+    'show',
+    'me',
+    'please',
+    'give',
+    'find',
+    'looking',
+    'for',
+    'want',
+    'need',
+    'items',
+    'item',
+    'products',
+    'product',
+    'rupaye',
+    'rupees',
+    'rs',
+  ]);
+
+  const rawTokens = text
+    .replace(/[^a-z0-9\s]/gi, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  const filteredTokens = rawTokens.filter((t) => !stopWords.has(t) && t.length > 1);
+
+  const tokens = filteredTokens.length > 0 ? filteredTokens : rawTokens;
+  const cleanedText = tokens.join(' ');
+
+  return { cleanedText, tokens, inferredMaxPrice };
 }
 
 export async function getCustomerProducts(params: ProductFilterParams = {}): Promise<{
@@ -230,16 +305,45 @@ export async function getCustomerProducts(params: ProductFilterParams = {}): Pro
     }
   }
 
-  // Search query with basic typo tolerance and SKU/tag/brand matching
+  let effectiveMaxPrice = params.maxPrice;
+
+  // Search query with natural phrasing & multi-token matching
   if (params.query && params.query.trim()) {
-    const q = params.query.toLowerCase().trim().replace(/[\s-_]+/g, '');
+    const parsed = parseSearchQuery(params.query);
+    if (parsed.inferredMaxPrice !== undefined && effectiveMaxPrice === undefined) {
+      effectiveMaxPrice = parsed.inferredMaxPrice;
+    }
+
+    const rawCompact = params.query.toLowerCase().trim().replace(/[\s-_]+/g, '');
+    const tokens = parsed.tokens;
+
     list = list.filter((p) => {
-      const nameMatch = p.name.toLowerCase().replace(/[\s-_]+/g, '').includes(q);
-      const skuMatch = p.sku.toLowerCase().includes(q);
-      const brandMatch = p.brand.toLowerCase().includes(q);
-      const tagMatch = p.tags.some((t) => t.toLowerCase().replace(/[\s-_]+/g, '').includes(q));
-      const descMatch = p.shortDescription?.toLowerCase().includes(q);
-      return nameMatch || skuMatch || brandMatch || tagMatch || descMatch;
+      // 1. Direct compact match for SKU or names
+      const pNameCompact = p.name.toLowerCase().replace(/[\s-_]+/g, '');
+      if (pNameCompact.includes(rawCompact)) return true;
+      if (p.sku.toLowerCase().includes(rawCompact)) return true;
+
+      // 2. Tokenized match: search across name, brand, category, tags, occasion, material, description
+      if (tokens.length > 0) {
+        const searchableCorpus = `${p.name} ${p.brand} ${p.categoryName} ${p.tags.join(' ')} ${p.occasion || ''} ${p.material || ''} ${p.shortDescription || ''}`.toLowerCase();
+        
+        // If all tokens match
+        const allMatch = tokens.every((tok) => {
+          if (tok === 'ladke' || tok === 'boy' || tok === 'boys') {
+            return searchableCorpus.includes('men') || searchableCorpus.includes('boy') || searchableCorpus.includes('watch') || searchableCorpus.includes('belt') || searchableCorpus.includes('gift');
+          }
+          return searchableCorpus.includes(tok);
+        });
+        if (allMatch) return true;
+
+        // If multiple tokens, at least majority match
+        if (tokens.length >= 2) {
+          const matchedCount = tokens.filter((tok) => searchableCorpus.includes(tok)).length;
+          if (matchedCount >= Math.ceil(tokens.length * 0.6)) return true;
+        }
+      }
+
+      return false;
     });
   }
 
@@ -247,8 +351,8 @@ export async function getCustomerProducts(params: ProductFilterParams = {}): Pro
   if (params.minPrice !== undefined) {
     list = list.filter((p) => p.price >= params.minPrice!);
   }
-  if (params.maxPrice !== undefined) {
-    list = list.filter((p) => p.price <= params.maxPrice!);
+  if (effectiveMaxPrice !== undefined) {
+    list = list.filter((p) => p.price <= effectiveMaxPrice!);
   }
 
   // Badges

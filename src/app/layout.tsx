@@ -4,6 +4,7 @@ import './globals.css';
 import { AuthProvider } from '@/lib/context/auth-context';
 import { CartProvider } from '@/lib/context/cart-context';
 import { WishlistProvider } from '@/lib/context/wishlist-context';
+import { SimpleModeProvider } from '@/lib/context/simple-mode-context';
 import Header from '@/components/layout/header';
 import MobileBottomNav from '@/components/layout/mobile-bottom-nav';
 import Footer from '@/components/layout/footer';
@@ -60,17 +61,19 @@ export default function RootLayout({
         <AuthProvider>
           <CartProvider>
             <WishlistProvider>
-              <NativeInitializer />
-              <OfflineBanner />
-              <ServiceWorkerRegister />
-              <Header />
-              <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
-                {children}
-              </main>
-              <Footer />
-              <CartDrawer />
-              <AiSupportModal />
-              <MobileBottomNav />
+              <SimpleModeProvider>
+                <NativeInitializer />
+                <OfflineBanner />
+                <ServiceWorkerRegister />
+                <Header />
+                <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+                  {children}
+                </main>
+                <Footer />
+                <CartDrawer />
+                <AiSupportModal />
+                <MobileBottomNav />
+              </SimpleModeProvider>
             </WishlistProvider>
           </CartProvider>
         </AuthProvider>

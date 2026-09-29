@@ -14,23 +14,29 @@ import {
   ShieldCheck,
   LogOut,
   X,
+  Mic,
+  Eye,
 } from 'lucide-react';
 import { useCart } from '@/lib/context/cart-context';
 import { useWishlist } from '@/lib/context/wishlist-context';
 import { useAuth } from '@/lib/context/auth-context';
+import { useSimpleMode } from '@/lib/context/simple-mode-context';
 import { isStoreCurrentlyOpen } from '@/lib/utils';
 import AuthModal from '@/components/auth/auth-modal';
+import VoiceSearchModal from '@/components/store/voice-search-modal';
 
 export default function Header() {
   const router = useRouter();
   const { itemCount, setIsCartDrawerOpen } = useCart();
   const { wishlistCount } = useWishlist();
   const { user, role, logout } = useAuth();
+  const { isSimpleMode, toggleSimpleMode } = useSimpleMode();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [storeStatus, setStoreStatus] = useState({ isOpen: true, message: 'Open now until 21:30' });
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(false);
 
   useEffect(() => {
     setStoreStatus(isStoreCurrentlyOpen('09:30', '21:30', ['Sunday']));
@@ -57,6 +63,19 @@ export default function Header() {
           </div>
 
           <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={toggleSimpleMode}
+              aria-label="Toggle Simple Mode / आसान मोड"
+              className={`px-2 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 transition-all ${
+                isSimpleMode
+                  ? 'bg-amber-400 text-stone-950 ring-2 ring-white shadow-sm'
+                  : 'bg-stone-800 text-stone-300 hover:text-white hover:bg-stone-700'
+              }`}
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>{isSimpleMode ? 'आसान मोड (ON)' : 'आसान मोड / Simple Mode'}</span>
+            </button>
             <div className="flex items-center gap-1.5">
               <span className={`w-2 h-2 rounded-full ${storeStatus.isOpen ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
               <span className={storeStatus.isOpen ? 'text-emerald-400' : 'text-rose-400'}>{storeStatus.message}</span>
@@ -100,18 +119,31 @@ export default function Header() {
                 placeholder="Search photo frames, brass idols, wall clocks, watches..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-10 py-2.5 bg-stone-100/80 border border-stone-300/80 rounded-full text-sm text-stone-900 placeholder:text-stone-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-600 transition-all shadow-inner"
+                aria-label="Search store catalogue"
+                className="w-full pl-10 pr-20 py-2.5 bg-stone-100/80 border border-stone-300/80 rounded-full text-sm text-stone-900 placeholder:text-stone-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-600 transition-all shadow-inner"
               />
               <Search className="w-4 h-4 text-stone-400 absolute left-3.5" />
-              {searchQuery && (
+              <div className="absolute right-2.5 flex items-center gap-1">
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    aria-label="Clear search text"
+                    className="text-stone-400 hover:text-stone-600 p-1"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-3 text-stone-400 hover:text-stone-600"
+                  onClick={() => setIsVoiceModalOpen(true)}
+                  aria-label="Voice search / बोलकर खोजें"
+                  title="Voice search / बोलकर खोजें"
+                  className="p-1.5 text-stone-500 hover:text-brand-600 hover:bg-stone-200/60 rounded-full transition-colors active-press"
                 >
-                  <X className="w-4 h-4" />
+                  <Mic className="w-4 h-4 text-brand-600" />
                 </button>
-              )}
+              </div>
             </form>
 
             {/* Right Action Icons */}
@@ -133,6 +165,7 @@ export default function Header() {
               {/* Wishlist Button */}
               <Link
                 href="/wishlist"
+                aria-label={`Wishlist with ${wishlistCount} items`}
                 className="p-2 sm:p-2.5 rounded-full text-stone-700 hover:text-brand-600 hover:bg-stone-100 relative active-press transition-colors"
                 title="Wishlist"
               >
@@ -148,6 +181,7 @@ export default function Header() {
               <button
                 type="button"
                 onClick={() => setIsCartDrawerOpen(true)}
+                aria-label={`Pickup Cart with ${itemCount} items`}
                 className="p-2 sm:p-2.5 rounded-full text-stone-700 hover:text-brand-600 hover:bg-stone-100 relative active-press transition-colors"
                 title="Pickup Cart"
               >
@@ -251,22 +285,38 @@ export default function Header() {
                 placeholder="Search gifts, frames, clocks, toys..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-8 py-2 bg-stone-100 border border-stone-300 rounded-full text-xs text-stone-900 placeholder:text-stone-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500"
+                aria-label="Search store catalogue"
+                className="w-full pl-9 pr-16 py-2 bg-stone-100 border border-stone-300 rounded-full text-xs text-stone-900 placeholder:text-stone-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500"
               />
               <Search className="w-3.5 h-3.5 text-stone-400 absolute left-3" />
-              {searchQuery && (
+              <div className="absolute right-2 flex items-center gap-1">
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    aria-label="Clear search"
+                    className="text-stone-400 p-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-2.5 text-stone-400"
+                  onClick={() => setIsVoiceModalOpen(true)}
+                  aria-label="Voice search / बोलकर खोजें"
+                  title="Voice search / बोलकर खोजें"
+                  className="p-1 text-brand-600 hover:text-brand-700 active-press"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <Mic className="w-4 h-4" />
                 </button>
-              )}
+              </div>
             </form>
           </div>
         </div>
       </header>
+
+      {/* Voice Search Modal */}
+      <VoiceSearchModal isOpen={isVoiceModalOpen} onClose={() => setIsVoiceModalOpen(false)} />
 
       {/* Auth Modal */}
       {isAuthModalOpen && <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />}

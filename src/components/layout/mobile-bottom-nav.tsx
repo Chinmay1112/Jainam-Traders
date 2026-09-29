@@ -33,6 +33,7 @@ export default function MobileBottomNav() {
             <Link
               key={item.label}
               href={item.href}
+              aria-label={item.badge ? `${item.label} (${item.badge} items)` : item.label}
               className={`flex flex-col items-center justify-center py-1 px-2 min-w-[56px] relative rounded-lg active-press transition-colors ${
                 item.active ? 'text-brand-600 font-bold' : 'text-stone-500 hover:text-stone-800'
               }`}
@@ -54,6 +55,7 @@ export default function MobileBottomNav() {
         <button
           type="button"
           onClick={() => setIsCartDrawerOpen(true)}
+          aria-label={`Shopping Cart (${itemCount} items)`}
           className="flex flex-col items-center justify-center py-1 px-2 min-w-[56px] relative rounded-lg active-press text-stone-500 hover:text-stone-800"
         >
           <div className="relative">
@@ -70,6 +72,7 @@ export default function MobileBottomNav() {
         {/* Account / Orders */}
         <Link
           href="/orders"
+          aria-label="View pickup orders"
           className={`flex flex-col items-center justify-center py-1 px-2 min-w-[56px] relative rounded-lg active-press transition-colors ${
             pathname.startsWith('/orders') || pathname.startsWith('/account')
               ? 'text-brand-600 font-bold'

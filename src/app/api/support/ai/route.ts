@@ -6,6 +6,29 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const userMessage = String(body.message || '').trim().toLowerCase();
 
+    // Security check: Block jailbreak attempts, prompt injection, and credential extraction (Part 24)
+    const isInjectionAttempt =
+      userMessage.includes('ignore previous') ||
+      userMessage.includes('ignore your instructions') ||
+      userMessage.includes('reveal system prompt') ||
+      userMessage.includes('system prompt') ||
+      userMessage.includes('database credential') ||
+      userMessage.includes('show all customer') ||
+      userMessage.includes('admin password') ||
+      userMessage.includes('hidden inventory') ||
+      userMessage.includes('reveal credentials') ||
+      userMessage.includes('secret key') ||
+      userMessage.includes('api key') ||
+      userMessage.includes('service role');
+
+    if (isInjectionAttempt) {
+      return NextResponse.json({
+        reply:
+          'I am the virtual assistant for Jainam Traders. I am programmed to assist only with public product availability, store hours, location, pickup rules, and order status verification. Internal administrative information and personal customer data are strictly confidential.',
+        escalateToHuman: false,
+      });
+    }
+
     // Deterministic tool dispatch based on customer intent
     let responseText = '';
     let escalateToHuman = false;
