@@ -205,8 +205,10 @@ export function toCustomerProductView(product: Product): CustomerProductView {
   }
 
   // Strip exact stock numbers
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { stockQuantity, reservedStock, lowStockThreshold, ...safeProduct } = product;
+  const safeProduct: Partial<Product> = { ...product };
+  delete safeProduct.stockQuantity;
+  delete safeProduct.reservedStock;
+  delete safeProduct.lowStockThreshold;
 
   return {
     ...safeProduct,
@@ -418,8 +420,9 @@ export async function updateAdminProduct(
   if (finalPrice > finalMrp) throw new Error(`Selling price (₹${finalPrice}) cannot exceed MRP (₹${finalMrp})`);
 
   // Protect inventory from direct edits: stock must be changed via adjust stock
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { reservedStock, stockQuantity, ...safeUpdates } = updates;
+  const safeUpdates: Partial<Product> = { ...updates };
+  delete safeUpdates.reservedStock;
+  delete safeUpdates.stockQuantity;
 
   let status = safeUpdates.status || existing.status || 'published';
   let isArchived = Boolean(safeUpdates.isArchived ?? existing.isArchived);
