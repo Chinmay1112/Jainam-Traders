@@ -47,7 +47,7 @@ Open [http://localhost:3000](http://localhost:3000) for the storefront and [http
 ```bash
 npm test
 ```
-Runs 14 automated tests covering server-side pricing, coupons, the order state machine, security validation, and the mandatory **concurrency reservation test** (verifying that two simultaneous orders cannot reserve the final remaining unit).
+Runs 44 automated tests across 6 test suites covering server-side pricing, inventory normalization (zero NaN), concurrency locking, mobile bridge, natural Hindi/Hinglish voice parsing, and AI security.
 
 ### 4. Build for Production
 ```bash
