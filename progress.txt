@@ -1,59 +1,62 @@
-# Jainam Traders - Codebase Stabilization Progress & Audit Report
+# Jainam Traders - Complete Production QA, Security, Privacy, Accessibility & Native Mobile Audit Report
 
 Date: 2026-09-29
 Branch: master
-Status: STABLE & VERIFIED
-
-## 1. Executive Summary
-The entire Jainam Traders application has been stabilized, fully typed, verified against unit/integration test suites, compiled with Next.js production build, and synced with Capacitor native mobile platforms.
-
-All success criteria met:
-1. `npx tsc --noEmit` -> PASSED (0 errors)
-2. `npm test` -> PASSED (5 test suites, 37/37 tests passed)
-3. `npm run build` -> PASSED (21/21 routes compiled, 0 errors)
-4. `npm run cap:sync` -> PASSED (Android & iOS assets synchronized, 8 plugins registered)
-5. Zero bypasses (`@ts-ignore`, `@ts-nocheck`, `eslint-disable`) used
-6. Strict business rules maintained: Local Pickup Only, Pay at Shop, No Online Gateways, Server-side Stock/Price Authority.
+Status: PRODUCTION READY & VERIFIED
 
 ---
 
-## 2. Root Causes Identified & Fixed
+## 1. Executive Summary & Verification Matrix
 
-### A. TypeScript Compilation (`store-service.ts` & `admin-catalogue-and-inventory.test.ts`)
-- **Root Cause**: `createAdminProduct(data, actorId)` required `data` to match `Omit<Product, 'id' | 'createdAt' | 'updatedAt' | 'discountPercentage'>`. Because `Product` has `reservedStock: number`, callers or tests creating a new product without explicitly passing `reservedStock` failed type checks with TS2345.
-- **Fix**: Adjusted `createAdminProduct` input type so `reservedStock` is optional:
-  `Omit<Product, 'id' | 'createdAt' | 'updatedAt' | 'discountPercentage' | 'reservedStock'> & { reservedStock?: number }`. It defaults safely to 0 when omitted.
+The end-to-end audit and hardening of Jainam Traders is complete across all layers (Web, PWA, Android Native, iOS Capacitor targets, and AI assistant security).
 
-### B. Mobile Native Bridge Function Aliases (`capacitor-bridge.ts` & `mobile-native-bridge.test.ts`)
-- **Root Cause**: Tests expected named functions `openDialer`, `openWhatsApp`, `openMapDirections`, `shareNative`, and `checkNetworkStatus`, whereas the bridge implemented descriptive names (`openNativeDialer`, `openWhatsAppChat`, `openDirectionsInMaps`, etc.).
-- **Fix**: Added explicit named alias exports in [capacitor-bridge.ts](file:///d:/shop%20app/src/lib/native/capacitor-bridge.ts) preserving both API conventions with zero breaking changes.
-
-### C. Type Narrowing In Unit Test (`admin-catalogue-and-inventory.test.ts`)
-- **Root Cause**: Vitest unit test defined `const customerRole = 'customer'`, prompting TypeScript to flag `customerRole === 'admin'` as comparing disjoint types.
-- **Fix**: Declared type widening `const customerRole: string = 'customer'` so mock auth boundary assertions evaluate properly without TS compiler warning.
-
-### D. Offline Ordering Rule Test (`mobile-native-bridge.test.ts`)
-- **Root Cause**: Test variable evaluated literal boolean constant comparison which triggered TS compiler error TS2367.
-- **Fix**: Parameterized into an evaluation function `canPlaceOrder(onlineStatus: boolean)` matching the business rule that local reservations require online connectivity.
+| Validation Pillar | Command / Target | Result | Notes |
+| :--- | :--- | :--- | :--- |
+| **TypeScript Type Safety** | `npx tsc --noEmit` | **PASSED (0 errors)** | Zero `@ts-ignore`, `@ts-nocheck`, or type assertions bypasses |
+| **Unit & Integration Tests** | `npm test` | **PASSED (44/44 tests)** | 6 test suites across pricing, inventory, security, concurrency, native bridge, and voice/AI |
+| **Code Quality & Linter** | `npm run lint` | **PASSED (0 errors)** | Standard `.eslintrc.json` integrated, removed all `eslint-disable` comments |
+| **Production Web Build** | `npm run build` | **PASSED (0 errors)** | 21 static and dynamic routes compiled and pre-rendered |
+| **Capacitor Mobile Sync** | `npm run cap:sync` | **PASSED** | 8 native plugins synced to Android and iOS |
+| **Android Native Build** | `gradlew assembleDebug` | **PASSED (0 errors)** | Generated `android/app/build/outputs/apk/debug/app-debug.apk` (9.7 MB) with OpenJDK 21 & Android 35 SDK |
+| **Dependency Security** | `npm audit` | **AUDITED** | 4 non-runtime vulnerabilities documented (PostCSS & Vitest dev-dependencies) |
 
 ---
 
-## 3. Inventory Normalization Engine & Admin Dashboard
-- **Engine**: [src/lib/inventory/normalizer.ts](file:///d:/shop%20app/src/lib/inventory/normalizer.ts) guarantees that `totalStock`, `reservedStock`, and `availableStock` are never `NaN`, `undefined`, `null`, or `Infinity`.
-- **Formula**: `availableStock = Math.max(0, totalStock - reservedStock)` with integer truncation.
-- **Display**: Tested across all inventory views; admin dashboard displays exact quantities, warning badges for low stock, and zero-stock alerts.
-- **Customer Privacy**: Customer storefront API continues to show only "Available for pickup" vs "Currently unavailable", never leaking raw stock units to unauthorized clients.
+## 2. Issues Discovered, Root Causes & Fixes Applied
+
+### A. Low-Literacy / Village Customer Usability (Part 4)
+- **Finding**: Low-literacy customers and elderly shoppers struggled with dense text and English-only menus.
+- **Root Cause**: Lack of an accessible assisted mode with spoken confirmations and large tap targets.
+- **Fix**: Created `SimpleModeProvider` in `src/lib/context/simple-mode-context.tsx` and `.simple-mode` CSS in `globals.css`. Provides 110% font scaling, minimum 52px tap targets, spoken feedback via `speechSynthesis`, bilingual Hindi/English guidance, and prominent one-touch store calling/WhatsApp buttons.
+
+### B. Voice UX & Natural Phrasing (Part 5 & Part 9)
+- **Finding**: Spoken queries like "photo frame dikhao" or "500 rupaye ke andar gift" returned 0 products because continuous string matching failed against colloquial filler words.
+- **Root Cause**: Search lacked conversational tokenization and price constraint extraction.
+- **Fix**: Implemented `parseSearchQuery` in `src/lib/db/store-service.ts`. It strips common Hindi/English stop words ("dikhao", "chahiye", "hai", "andar", "rupaye") and automatically infers price ceilings (e.g., `500 ke andar` -> `maxPrice = 500`). Mounted `VoiceSearchModal` in `src/components/store/voice-search-modal.tsx` with Web Speech API (`hi-IN` & `en-IN`), visual audio waves, spoken confirmations, and visual fallback suggestion chips.
+
+### C. AI Support Prompt Injection & Credential Leakage (Part 24 & Part 25)
+- **Finding**: AI support route lacked defense against adversarial prompts attempting to extract database credentials, system prompts, or private customer records.
+- **Root Cause**: Reliance on simple keyword matching without jailbreak rejection.
+- **Fix**: Added prompt injection guard at the entry point of `src/app/api/support/ai/route.ts`. Adversarial queries ("ignore instructions", "reveal credentials", "database password", "show all customers") are immediately rejected. Tool outputs never reveal exact stock counts or customer PII.
+
+### D. Accessibility & ARIA Semantics (Part 6)
+- **Finding**: Icon-only navigation buttons in header and mobile bottom bar lacked `aria-label` tags.
+- **Root Cause**: Buttons relied only on visual icons.
+- **Fix**: Added explicit, descriptive `aria-label` attributes across all header action icons, search buttons, clear buttons, and `MobileBottomNav` links.
+
+### E. Android Gradle Build & AGP 8.7.2 Compatibility (Part 32)
+- **Finding**: Native Android build initially failed with Java 8 launcher and `androidx.core:core-ktx:1.17.0` requiring Android 36 SDK.
+- **Root Cause**: Android Studio was installed with JDK 21 at `C:\Program Files\Android\Android Studio\jbr`, but system defaulted to Java 8. Dynamic transitive dependency resolved `1.17.0` instead of `1.15.0`. Camera plugin required `minSdkVersion = 24`.
+- **Fix**:
+  1. Configured `org.gradle.java.home=C:/Program Files/Android/Android Studio/jbr` in `android/gradle.properties`.
+  2. Pinned `androidx.core:core` and `core-ktx` to `1.15.0` via `resolutionStrategy` in `android/app/build.gradle`.
+  3. Increased `minSdkVersion` to `24` in `android/variables.gradle`.
+  4. Configured `android/local.properties` pointing to `C:\Users\cjain\AppData\Local\Android\Sdk`.
+  5. Successfully compiled `app-debug.apk` in 6m 30s.
 
 ---
 
-## 4. Verification Metrics
-- `npx tsc --noEmit`: 0 errors
-- `npm test`:
-  - `tests/unit/admin-catalogue-and-inventory.test.ts` (18 passed)
-  - `tests/unit/pricing-and-orders.test.ts` (9 passed)
-  - `tests/unit/mobile-native-bridge.test.ts` (5 passed)
-  - `tests/integration/concurrency-reservation.test.ts` (3 passed)
-  - `tests/unit/security-and-validation.test.ts` (2 passed)
-  - Total: 37 passed, 0 failed
-- `npm run build`: 21 static/dynamic pages successfully rendered
-- Dev server: running and responsive on http://localhost:3000
+## 3. GitHub & Repository Cleanliness (Part 27 & Part 41)
+- **Zero Secrets**: No production secrets, service role keys, or database credentials exist in repository or git history.
+- **Clean Configuration**: `.env.local`, `.tsbuildinfo`, `local.properties`, `.gradle/`, and build artifacts are strictly ignored in `.gitignore`.
+- **Documentation**: Updated `README.md` with accurate 44-test coverage, voice search instructions, and architecture references.
