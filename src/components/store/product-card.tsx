@@ -4,6 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { Heart, Star, ShoppingBag, Check } from 'lucide-react';
+import ProductImage from '@/components/ui/product-image';
 import { CustomerProductView } from '@/lib/types';
 import { formatINR } from '@/lib/utils';
 import { useCart } from '@/lib/context/cart-context';
@@ -26,11 +27,12 @@ export default function ProductCard({ product }: ProductCardProps) {
       {/* Image & Badges */}
       <div className="relative aspect-square w-full bg-stone-100 overflow-hidden">
         <Link href={`/products/${product.slug}`} className="block w-full h-full">
-          <Image
+          <ProductImage
             src={product.thumbnailUrl}
             alt={product.name}
             fill
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+            categoryName={product.categoryName}
             className="object-cover object-center group-hover:scale-105 transition-transform duration-300"
           />
         </Link>

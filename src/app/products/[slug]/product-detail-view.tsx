@@ -15,10 +15,10 @@ import {
   Share2,
   CheckCircle2,
   Tag,
-  Info,
   Sparkles,
   Camera,
 } from 'lucide-react';
+import ProductImage from '@/components/ui/product-image';
 import { CustomerProductView, ProductVariant, Review } from '@/lib/types';
 import { formatINR } from '@/lib/utils';
 import { useCart } from '@/lib/context/cart-context';
@@ -149,12 +149,13 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
         {/* Left: Gallery */}
         <div className="lg:col-span-6 space-y-4">
           <div className="relative aspect-square w-full rounded-2xl overflow-hidden bg-stone-100 border border-stone-200 shadow-inner group">
-            <Image
+            <ProductImage
               src={selectedImage}
               alt={product.name}
               fill
               priority
               sizes="(max-width: 1024px) 100vw, 50vw"
+              categoryName={product.categoryName}
               className="object-cover object-center transition-transform duration-300 group-hover:scale-105"
             />
 
@@ -216,7 +217,13 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
                       : 'border-stone-200 hover:border-stone-400 opacity-70 hover:opacity-100'
                   }`}
                 >
-                  <Image src={img} alt={`${product.name} thumb ${idx}`} fill className="object-cover" />
+                  <ProductImage
+                    src={img}
+                    alt={`${product.name} thumb ${idx}`}
+                    fill
+                    sizes="80px"
+                    className="object-cover"
+                  />
                 </button>
               ))}
             </div>

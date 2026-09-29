@@ -28,6 +28,11 @@ import {
 import { INITIAL_CATEGORIES, INITIAL_COUPONS, INITIAL_OFFERS, INITIAL_PRODUCTS, INITIAL_SHOP_SETTINGS } from './initial-data';
 import { canTransitionOrder } from '@/lib/orders/state-machine';
 import { calculateOrderPricing, RawCheckoutItem, ValidatedItem } from '@/lib/pricing/engine';
+import {
+  normalizeStockNumber,
+  normalizeProductInventory,
+  calculateStockAdjustment,
+} from '@/lib/inventory/normalizer';
 
 // Global in-memory storage for high-concurrency local development & automated test execution
 class StoreDataStore {
@@ -189,12 +194,13 @@ export interface ProductFilterParams {
 
 // Convert internal Product to customer-safe view (Rule 10: NEVER show raw stock numbers to customers)
 export function toCustomerProductView(product: Product): CustomerProductView {
-  const availableUnits = product.stockQuantity - product.reservedStock;
+  const { availableStock } = normalizeProductInventory(product);
   let availability: 'AVAILABLE' | 'OUT_OF_STOCK' | 'COMING_SOON' = 'AVAILABLE';
 
-  if (!product.isActive) {
+  const isArchived = Boolean(product.isArchived || product.status === 'archived');
+  if (!product.isActive || isArchived) {
     availability = 'COMING_SOON';
-  } else if (availableUnits <= 0) {
+  } else if (availableStock <= 0) {
     availability = 'OUT_OF_STOCK';
   }
 
@@ -212,7 +218,7 @@ export async function getCustomerProducts(params: ProductFilterParams = {}): Pro
   products: CustomerProductView[];
   total: number;
 }> {
-  let list = storeDb.products.filter((p) => p.isActive);
+  let list = storeDb.products.filter((p) => p.isActive && !p.isArchived && p.status !== 'archived');
 
   // Category filter
   if (params.categorySlug) {
@@ -280,7 +286,9 @@ export async function getCustomerProducts(params: ProductFilterParams = {}): Pro
 }
 
 export async function getProductBySlug(slug: string): Promise<CustomerProductView | null> {
-  const p = storeDb.products.find((prod) => prod.slug === slug && prod.isActive);
+  const p = storeDb.products.find(
+    (prod) => prod.slug === slug && prod.isActive && !prod.isArchived && prod.status !== 'archived'
+  );
   if (!p) return null;
   return toCustomerProductView(p);
 }
@@ -292,26 +300,102 @@ export async function getRawProductById(id: string): Promise<Product | null> {
 /**
  * 4. ADMIN INVENTORY & PRODUCT MANAGEMENT
  */
-export async function getAdminProducts(): Promise<Product[]> {
-  return storeDb.products;
+export async function getAdminProducts(filter?: {
+  status?: 'all' | 'active' | 'archived';
+  search?: string;
+}): Promise<Product[]> {
+  let list = storeDb.products.map((p) => {
+    const inv = normalizeProductInventory(p);
+    return {
+      ...p,
+      stockQuantity: inv.totalStock,
+      reservedStock: inv.reservedStock,
+      lowStockThreshold: inv.lowStockThreshold,
+      isArchived: Boolean(p.isArchived || p.status === 'archived'),
+      status: p.status || (p.isArchived ? 'archived' : p.isActive ? 'published' : 'hidden'),
+    };
+  });
+
+  if (filter?.status === 'active') {
+    list = list.filter((p) => !p.isArchived && p.status !== 'archived');
+  } else if (filter?.status === 'archived') {
+    list = list.filter((p) => p.isArchived || p.status === 'archived');
+  }
+
+  if (filter?.search && filter.search.trim()) {
+    const q = filter.search.toLowerCase().trim();
+    list = list.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        p.brand.toLowerCase().includes(q) ||
+        (p.categoryName && p.categoryName.toLowerCase().includes(q))
+    );
+  }
+
+  return list;
 }
 
 export async function createAdminProduct(
   data: Omit<Product, 'id' | 'createdAt' | 'updatedAt' | 'discountPercentage'>,
   actorId?: string
 ): Promise<Product> {
+  if (!data.name || !data.name.trim()) throw new Error('Product name is required');
+  if (!data.sku || !data.sku.trim()) throw new Error('Product SKU is required');
+  if (data.price <= 0) throw new Error('Selling price must be greater than zero');
+  if (data.mrp < data.price) throw new Error('Selling price cannot exceed MRP');
+
   const discountPct = data.mrp > 0 ? Math.round(((data.mrp - data.price) / data.mrp) * 100) : 0;
+  const initialStock = normalizeStockNumber(data.stockQuantity, 0);
+  const lowStockThreshold = normalizeStockNumber(data.lowStockThreshold, 3);
+  const status = data.status || 'published';
+  const isArchived = status === 'archived' || Boolean(data.isArchived);
+  const isActive = isArchived ? false : data.isActive !== undefined ? data.isActive : true;
+
   const newProduct: Product = {
     ...data,
     id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    slug: data.slug || data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
     discountPercentage: discountPct,
+    stockQuantity: initialStock,
     reservedStock: 0,
+    lowStockThreshold,
+    status,
+    isArchived,
+    isActive,
+    thumbnailUrl: data.thumbnailUrl || '/images/product-placeholder.svg',
+    images: data.images && data.images.length > 0 ? data.images : [data.thumbnailUrl || '/images/product-placeholder.svg'],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
 
   storeDb.products.unshift(newProduct);
-  storeDb.logAudit(actorId, 'admin', 'CREATE_PRODUCT', 'products', newProduct.id, { name: newProduct.name, sku: newProduct.sku });
+
+  // Record initial stock movement audit log if stock > 0
+  if (initialStock > 0) {
+    const initMovement: InventoryMovement = {
+      id: `mov-${Date.now()}`,
+      productId: newProduct.id,
+      productName: newProduct.name,
+      quantityChange: initialStock,
+      previousStock: 0,
+      newStock: initialStock,
+      reason: 'restock',
+      notes: 'Initial stock recorded on product creation',
+      actorId,
+      createdAt: new Date().toISOString(),
+    };
+    storeDb.inventoryMovements.unshift(initMovement);
+  }
+
+  storeDb.logAudit(actorId, 'admin', 'CREATE_PRODUCT', 'products', newProduct.id, {
+    name: newProduct.name,
+    sku: newProduct.sku,
+    initialStock,
+    price: newProduct.price,
+    mrp: newProduct.mrp,
+  });
+
   return newProduct;
 }
 
@@ -324,26 +408,105 @@ export async function updateAdminProduct(
   if (index === -1) throw new Error('Product not found');
 
   const existing = storeDb.products[index];
+
+  // Price validation: selling price must not exceed MRP
+  const finalPrice = updates.price !== undefined ? updates.price : existing.price;
+  const finalMrp = updates.mrp !== undefined ? updates.mrp : existing.mrp;
+  if (finalPrice <= 0) throw new Error('Selling price must be greater than 0');
+  if (finalPrice > finalMrp) throw new Error(`Selling price (₹${finalPrice}) cannot exceed MRP (₹${finalMrp})`);
+
+  // Protect inventory from direct edits: stock must be changed via adjust stock
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { reservedStock, stockQuantity, ...safeUpdates } = updates;
+
+  let status = safeUpdates.status || existing.status || 'published';
+  let isArchived = Boolean(safeUpdates.isArchived ?? existing.isArchived);
+  let isActive = safeUpdates.isActive !== undefined ? safeUpdates.isActive : existing.isActive;
+
+  if (safeUpdates.status === 'archived') {
+    isArchived = true;
+    isActive = false;
+    status = 'archived';
+  } else if (safeUpdates.status === 'published') {
+    isArchived = false;
+    isActive = true;
+    status = 'published';
+  } else if (safeUpdates.status === 'hidden') {
+    isArchived = false;
+    isActive = false;
+    status = 'hidden';
+  }
+
+  const discountPercentage =
+    finalMrp > 0 ? Math.round(((finalMrp - finalPrice) / finalMrp) * 100) : 0;
+
   const updated: Product = {
     ...existing,
-    ...updates,
+    ...safeUpdates,
+    price: finalPrice,
+    mrp: finalMrp,
+    discountPercentage,
+    status,
+    isArchived,
+    isActive,
     updatedAt: new Date().toISOString(),
   };
 
-  if (updated.mrp > 0) {
-    updated.discountPercentage = Math.round(((updated.mrp - updated.price) / updated.mrp) * 100);
-  }
-
   storeDb.products[index] = updated;
-  storeDb.logAudit(actorId, 'admin', 'UPDATE_PRODUCT', 'products', id, updates);
+  storeDb.logAudit(actorId, 'admin', 'UPDATE_PRODUCT', 'products', id, {
+    name: updated.name,
+    sku: updated.sku,
+    price: updated.price,
+    mrp: updated.mrp,
+    status: updated.status,
+  });
+
   return updated;
+}
+
+export async function archiveAdminProduct(id: string, actorId?: string): Promise<Product> {
+  const index = storeDb.products.findIndex((p) => p.id === id);
+  if (index === -1) throw new Error('Product not found');
+
+  const existing = storeDb.products[index];
+  existing.isArchived = true;
+  existing.status = 'archived';
+  existing.isActive = false;
+  existing.updatedAt = new Date().toISOString();
+
+  storeDb.products[index] = existing;
+  storeDb.logAudit(actorId, 'admin', 'ARCHIVE_PRODUCT', 'products', id, {
+    name: existing.name,
+    sku: existing.sku,
+  });
+
+  return existing;
+}
+
+export async function unarchiveAdminProduct(id: string, actorId?: string): Promise<Product> {
+  const index = storeDb.products.findIndex((p) => p.id === id);
+  if (index === -1) throw new Error('Product not found');
+
+  const existing = storeDb.products[index];
+  existing.isArchived = false;
+  existing.status = 'published';
+  existing.isActive = true;
+  existing.updatedAt = new Date().toISOString();
+
+  storeDb.products[index] = existing;
+  storeDb.logAudit(actorId, 'admin', 'UNARCHIVE_PRODUCT', 'products', id, {
+    name: existing.name,
+    sku: existing.sku,
+  });
+
+  return existing;
 }
 
 export async function adjustInventory(
   productId: string,
   variantId: string | undefined,
   quantityChange: number, // positive for add, negative for deduction
-  reason: 'purchase' | 'sale' | 'damage' | 'missing' | 'manual_correction' | 'return' | 'restock',
+  reason: 'purchase' | 'sale' | 'damage' | 'missing' | 'manual_correction' | 'return' | 'restock' | 'other',
   notes: string,
   actorId?: string
 ): Promise<{ product: Product; movement: InventoryMovement }> {
@@ -351,20 +514,25 @@ export async function adjustInventory(
     const product = storeDb.products.find((p) => p.id === productId);
     if (!product) throw new Error('Product not found');
 
-    const prevStock = product.stockQuantity;
-    const newStock = Math.max(0, prevStock + quantityChange);
+    const check = calculateStockAdjustment(product.stockQuantity, quantityChange);
+    if (!check.isValid) {
+      throw new Error(check.error || 'Invalid stock adjustment');
+    }
+
+    const prevStock = check.prevStock;
+    const newStock = check.newStock;
     product.stockQuantity = newStock;
     product.updatedAt = new Date().toISOString();
 
     const movement: InventoryMovement = {
-      id: `mov-${Date.now()}`,
+      id: `mov-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       productId,
       productName: product.name,
       variantId,
-      quantityChange,
+      quantityChange: check.change,
       previousStock: prevStock,
       newStock,
-      reason,
+      reason: reason as any,
       notes,
       actorId,
       createdAt: new Date().toISOString(),
@@ -372,10 +540,12 @@ export async function adjustInventory(
 
     storeDb.inventoryMovements.unshift(movement);
     storeDb.logAudit(actorId, 'staff', 'ADJUST_INVENTORY', 'inventory', productId, {
-      quantityChange,
+      productName: product.name,
+      quantityChange: check.change,
       reason,
       prevStock,
       newStock,
+      notes,
     });
 
     return { product, movement };
@@ -409,9 +579,11 @@ export async function createPickupOrder(params: CreateOrderParams): Promise<Orde
 
     // 1. Validate existence and stock availability
     for (const item of params.items) {
-      const prod = storeDb.products.find((p) => p.id === item.productId && p.isActive);
+      const prod = storeDb.products.find(
+        (p) => p.id === item.productId && p.isActive && !p.isArchived && p.status !== 'archived'
+      );
       if (!prod) {
-        throw new Error(`Product ${item.productId} is no longer available.`);
+        throw new Error(`Product ${item.productId} is no longer available or has been archived.`);
       }
 
       if (item.quantity < (prod.minOrderQuantity || 1)) {

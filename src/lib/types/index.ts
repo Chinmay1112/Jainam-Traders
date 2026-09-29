@@ -146,6 +146,8 @@ export interface Product {
   isNewArrival: boolean;
   isBestSeller: boolean;
   isActive: boolean;
+  status?: 'published' | 'hidden' | 'archived';
+  isArchived?: boolean;
   variants?: ProductVariant[];
   averageRating?: number;
   reviewCount?: number;
