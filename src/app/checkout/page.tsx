@@ -23,6 +23,7 @@ import { useCart } from '@/lib/context/cart-context';
 import { useAuth } from '@/lib/context/auth-context';
 import { formatINR } from '@/lib/utils';
 import AuthModal from '@/components/auth/auth-modal';
+import { triggerHaptic, getCurrentNetworkStatus } from '@/lib/native/capacitor-bridge';
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -97,6 +98,12 @@ export default function CheckoutPage() {
       return;
     }
 
+    const isConnected = await getCurrentNetworkStatus();
+    if (!isConnected) {
+      setErrorMessage('You are currently offline. An active internet connection is required to reserve store inventory.');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -127,6 +134,9 @@ export default function CheckoutPage() {
       if (!res.ok) {
         throw new Error(data.error || 'Failed to place pickup order');
       }
+
+      // Haptic confirmation
+      triggerHaptic('success');
 
       // Clear cart
       clearCart();

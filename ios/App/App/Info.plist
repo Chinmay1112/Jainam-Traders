@@ -45,5 +45,20 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Jainam Traders uses camera access to allow you to take and attach photos of purchased items for customer reviews.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Jainam Traders accesses your photo library so you can select and upload photos for customer reviews.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.jainamtraders.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>jainamtraders</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

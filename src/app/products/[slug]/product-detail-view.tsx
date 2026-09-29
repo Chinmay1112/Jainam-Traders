@@ -17,6 +17,7 @@ import {
   Tag,
   Info,
   Sparkles,
+  Camera,
 } from 'lucide-react';
 import { CustomerProductView, ProductVariant, Review } from '@/lib/types';
 import { formatINR } from '@/lib/utils';
@@ -25,6 +26,7 @@ import { useWishlist } from '@/lib/context/wishlist-context';
 import { useAuth } from '@/lib/context/auth-context';
 import AuthModal from '@/components/auth/auth-modal';
 import ProductCard from '@/components/store/product-card';
+import { nativeShareProduct, triggerHaptic, capturePhotoOrPick } from '@/lib/native/capacitor-bridge';
 
 interface ProductDetailViewProps {
   product: CustomerProductView;
@@ -52,6 +54,7 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewTitle, setReviewTitle] = useState('');
   const [reviewComment, setReviewComment] = useState('');
+  const [reviewPhoto, setReviewPhoto] = useState<string | null>(null);
   const [submittingReview, setSubmittingReview] = useState(false);
   const [reviewError, setReviewError] = useState('');
   const [reviewSuccess, setReviewSuccess] = useState(false);
@@ -62,19 +65,34 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
   const currentPrice = selectedVariant?.priceOverride || product.price;
 
   const handleAddToCart = () => {
+    triggerHaptic('light');
     addItem(product, selectedVariant, quantity);
   };
 
   const handleReserveNow = () => {
+    triggerHaptic('light');
     addItem(product, selectedVariant, quantity);
     router.push('/checkout');
   };
 
-  const handleShare = () => {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(window.location.href);
+  const handleShare = async () => {
+    const canonicalUrl = typeof window !== 'undefined' ? window.location.href : `https://jainamtraders.com/products/${product.slug}`;
+    const shared = await nativeShareProduct(
+      product.name,
+      `Check out ${product.name} at Jainam Traders! Reserve online and pay at our shop counter.`,
+      canonicalUrl
+    );
+    if (!shared && navigator.clipboard) {
+      navigator.clipboard.writeText(canonicalUrl);
       setCopiedShare(true);
       setTimeout(() => setCopiedShare(false), 2000);
+    }
+  };
+
+  const handlePickReviewPhoto = async () => {
+    const photo = await capturePhotoOrPick();
+    if (photo) {
+      setReviewPhoto(photo);
     }
   };
 
@@ -99,6 +117,7 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
           rating: reviewRating,
           title: reviewTitle.trim(),
           comment: reviewComment.trim(),
+          images: reviewPhoto ? [reviewPhoto] : [],
         }),
       });
 
@@ -580,6 +599,33 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
                   onChange={(e) => setReviewComment(e.target.value)}
                   className="w-full px-3 py-2 border border-stone-300 rounded-lg text-xs"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 uppercase mb-1">
+                  Add Product Photo (Optional)
+                </label>
+                {reviewPhoto ? (
+                  <div className="flex items-center gap-3 p-2 bg-stone-50 border border-stone-200 rounded-xl">
+                    <img src={reviewPhoto} alt="Review attachment" className="w-12 h-12 object-cover rounded-lg" />
+                    <span className="text-xs text-emerald-700 font-bold">Photo attached</span>
+                    <button
+                      type="button"
+                      onClick={() => setReviewPhoto(null)}
+                      className="text-stone-400 hover:text-rose-600 text-xs ml-auto"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handlePickReviewPhoto}
+                    className="w-full py-2.5 px-3 border-2 border-dashed border-stone-300 hover:border-brand-500 rounded-xl text-xs font-bold text-stone-600 hover:text-brand-600 flex items-center justify-center gap-2 transition-colors"
+                  >
+                    <Camera className="w-4 h-4" /> Take Photo / Pick from Gallery
+                  </button>
+                )}
               </div>
 
               <div className="flex gap-2 pt-2">

@@ -10,6 +10,8 @@ import Footer from '@/components/layout/footer';
 import CartDrawer from '@/components/cart/cart-drawer';
 import AiSupportModal from '@/components/support/ai-support-modal';
 import ServiceWorkerRegister from '@/components/layout/sw-register';
+import NativeInitializer from '@/components/native/native-initializer';
+import OfflineBanner from '@/components/native/offline-banner';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -58,6 +60,8 @@ export default function RootLayout({
         <AuthProvider>
           <CartProvider>
             <WishlistProvider>
+              <NativeInitializer />
+              <OfflineBanner />
               <ServiceWorkerRegister />
               <Header />
               <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
