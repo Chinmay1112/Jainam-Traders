@@ -23,6 +23,7 @@ export interface CustomerAccount {
   fullName: string;
   phone: string;
   address: string;
+  avatarUrl?: string;
   languagePreference: 'en' | 'hi';
   authenticationMethod: 'email_password' | 'google' | 'otp';
   accountStatus: CustomerAccountStatus;
@@ -294,6 +295,7 @@ class CustomerStore {
       fullName?: string;
       phone?: string;
       address?: string;
+      avatarUrl?: string;
       languagePreference?: 'en' | 'hi';
       marketingCommunicationPreference?: boolean;
     }
@@ -306,6 +308,7 @@ class CustomerStore {
     if (updates.fullName !== undefined) account.fullName = updates.fullName.trim();
     if (updates.phone !== undefined) account.phone = updates.phone.trim();
     if (updates.address !== undefined) account.address = updates.address.trim();
+    if (updates.avatarUrl !== undefined) account.avatarUrl = updates.avatarUrl;
     if (updates.languagePreference !== undefined) account.languagePreference = updates.languagePreference;
     if (updates.marketingCommunicationPreference !== undefined) {
       account.marketingCommunicationPreference = updates.marketingCommunicationPreference;

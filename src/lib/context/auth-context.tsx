@@ -6,11 +6,13 @@ import { StaffRole } from '@/lib/auth/staff-roles';
 import { createClient } from '@/lib/supabase/client';
 import type { User } from '@supabase/supabase-js';
 
-interface StaffUser {
+export interface StaffUser {
   id: string;
   email: string;
   fullName: string;
   role: StaffRole;
+  phone?: string;
+  avatarUrl?: string;
 }
 
 interface AuthContextType {
@@ -35,12 +37,21 @@ interface AuthContextType {
   logout: () => Promise<void>;
   logoutStaff: () => Promise<void>;
   updateProfile: (data: Partial<UserProfile>) => Promise<void>;
+  updateStaffProfile: (data: {
+    fullName?: string;
+    phone?: string;
+    avatarUrl?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
   checkStaffSession: () => Promise<StaffUser | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 function mapSupabaseUserToProfile(sbUser: User): UserProfile {
+  let cachedAvatar: string | undefined = undefined;
+  if (typeof window !== 'undefined') {
+    cachedAvatar = localStorage.getItem(`jt_customer_avatar_${sbUser.id}`) || undefined;
+  }
   return {
     id: sbUser.id,
     fullName:
@@ -51,7 +62,7 @@ function mapSupabaseUserToProfile(sbUser: User): UserProfile {
     email: sbUser.email,
     phone: sbUser.phone || sbUser.user_metadata?.phone || undefined,
     role: 'customer',
-    avatarUrl: sbUser.user_metadata?.avatar_url || undefined,
+    avatarUrl: sbUser.user_metadata?.avatar_url || cachedAvatar || undefined,
     savedAddress: sbUser.user_metadata?.saved_address || undefined,
     createdAt: sbUser.created_at || new Date().toISOString(),
     updatedAt: sbUser.updated_at || new Date().toISOString(),
@@ -114,8 +125,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         if (data.authenticated && data.staff) {
-          setStaffUser(data.staff);
-          return data.staff;
+          let cachedAvatar: string | undefined = undefined;
+          if (typeof window !== 'undefined') {
+            cachedAvatar = localStorage.getItem(`jt_staff_avatar_${data.staff.id}`) || undefined;
+          }
+          const fullStaff: StaffUser = {
+            ...data.staff,
+            avatarUrl: data.staff.avatarUrl || cachedAvatar,
+          };
+          setStaffUser(fullStaff);
+          return fullStaff;
         }
       }
     } catch {
@@ -236,12 +255,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           full_name: data.fullName,
           phone: data.phone,
           saved_address: data.savedAddress,
+          avatar_url: data.avatarUrl,
         },
       });
     } catch {
       // ignore
     }
     setUser((prev) => (prev ? { ...prev, ...data, updatedAt: new Date().toISOString() } : null));
+    if (typeof window !== 'undefined' && data.avatarUrl) {
+      localStorage.setItem(`jt_customer_avatar_${user.id}`, data.avatarUrl);
+    }
+  };
+
+  const updateStaffProfile = async (data: {
+    fullName?: string;
+    phone?: string;
+    avatarUrl?: string;
+  }): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await fetch('/api/auth/staff/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const resData = await res.json();
+      if (!res.ok || !resData.success) {
+        return { success: false, error: resData.error || 'Failed to update staff profile' };
+      }
+      if (resData.staff) {
+        setStaffUser(resData.staff);
+        if (typeof window !== 'undefined' && resData.staff.avatarUrl) {
+          localStorage.setItem(`jt_staff_avatar_${resData.staff.id}`, resData.staff.avatarUrl);
+        }
+      }
+      return { success: true };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Update failed';
+      return { success: false, error: msg };
+    }
   };
 
   return (
@@ -259,6 +310,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logout,
         logoutStaff,
         updateProfile,
+        updateStaffProfile,
         checkStaffSession,
       }}
     >

@@ -81,6 +81,10 @@ export default function Header() {
     ? staffUser?.email || ''
     : user?.email || user?.phone || '';
 
+  const displayAvatar = isStaffLoggedIn
+    ? staffUser?.avatarUrl
+    : user?.avatarUrl;
+
   const displayRole = (isStaffLoggedIn ? staffUser?.role : role || 'CUSTOMER').toUpperCase();
 
   return (
@@ -204,7 +208,7 @@ export default function Header() {
                   }`}
                 >
                   <div
-                    className={`w-7 h-7 rounded-full font-bold text-xs flex items-center justify-center ${
+                    className={`w-7 h-7 rounded-full font-bold text-xs flex items-center justify-center overflow-hidden shrink-0 ${
                       isStaffLoggedIn
                         ? 'bg-amber-100 text-amber-800 ring-1 ring-amber-400'
                         : isLoggedIn
@@ -212,7 +216,13 @@ export default function Header() {
                         : 'bg-stone-100 text-stone-600'
                     }`}
                   >
-                    {isLoggedIn ? displayName.charAt(0).toUpperCase() : <User className="w-4 h-4" />}
+                    {displayAvatar ? (
+                      <img src={displayAvatar} alt={displayName} className="w-full h-full object-cover" />
+                    ) : isLoggedIn ? (
+                      displayName.charAt(0).toUpperCase()
+                    ) : (
+                      <User className="w-4 h-4" />
+                    )}
                   </div>
                   <span className="hidden sm:inline max-w-[90px] truncate text-xs font-semibold">
                     {isLoggedIn ? displayName.split(' ')[0] : (language === 'hi' ? 'प्रोफ़ाइल' : 'Profile')}
@@ -225,18 +235,33 @@ export default function Header() {
                   <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-xl border border-stone-200 py-2.5 z-50 text-sm animate-in fade-in slide-in-from-top-2 duration-150">
                     {/* User Header / Guest Header */}
                     {isLoggedIn ? (
-                      <div className="px-4 py-2.5 border-b border-stone-100">
-                        <p className="font-bold text-stone-900 truncate">{displayName}</p>
-                        {displayEmail && <p className="text-xs text-stone-500 truncate">{displayEmail}</p>}
-                        <span
-                          className={`inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase ${
+                      <div className="px-4 py-2.5 border-b border-stone-100 flex items-center gap-3">
+                        <div
+                          className={`w-10 h-10 rounded-full font-bold text-sm flex items-center justify-center overflow-hidden shrink-0 ${
                             isStaffLoggedIn
-                              ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                              : 'bg-stone-100 text-stone-700'
+                              ? 'bg-amber-100 text-amber-800 ring-2 ring-amber-300'
+                              : 'bg-brand-100 text-brand-700'
                           }`}
                         >
-                          Role: {displayRole}
-                        </span>
+                          {displayAvatar ? (
+                            <img src={displayAvatar} alt={displayName} className="w-full h-full object-cover" />
+                          ) : (
+                            displayName.charAt(0).toUpperCase()
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold text-stone-900 truncate">{displayName}</p>
+                          {displayEmail && <p className="text-xs text-stone-500 truncate">{displayEmail}</p>}
+                          <span
+                            className={`inline-block mt-0.5 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase ${
+                              isStaffLoggedIn
+                                ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                : 'bg-stone-100 text-stone-700'
+                            }`}
+                          >
+                            Role: {displayRole}
+                          </span>
+                        </div>
                       </div>
                     ) : (
                       <div className="px-4 py-2.5 border-b border-stone-100">

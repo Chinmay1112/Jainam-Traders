@@ -40,6 +40,7 @@ export async function PATCH(request: NextRequest) {
       fullName?: string;
       phone?: string;
       address?: string;
+      avatarUrl?: string;
       languagePreference?: 'en' | 'hi';
       marketingCommunicationPreference?: boolean;
     } = {};
@@ -47,6 +48,7 @@ export async function PATCH(request: NextRequest) {
     if (body.fullName && typeof body.fullName === 'string') updates.fullName = body.fullName;
     if (body.phone && typeof body.phone === 'string') updates.phone = body.phone;
     if (body.address && typeof body.address === 'string') updates.address = body.address;
+    if (body.avatarUrl && typeof body.avatarUrl === 'string') updates.avatarUrl = body.avatarUrl;
     if (body.languagePreference && (body.languagePreference === 'en' || body.languagePreference === 'hi')) {
       updates.languagePreference = body.languagePreference;
     }

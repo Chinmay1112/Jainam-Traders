@@ -12,6 +12,8 @@ export interface StaffSession {
   email: string;
   fullName: string;
   role: StaffRole;
+  phone?: string;
+  avatarUrl?: string;
   iat: number;
   exp: number;
 }
