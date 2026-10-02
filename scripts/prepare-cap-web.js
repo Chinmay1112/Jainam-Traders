@@ -236,12 +236,10 @@ const shellHtml = `<!DOCTYPE html>
     <h2>Connecting to Storefront</h2>
     <p>Please ensure you are connected to the internet to browse our live catalogue and manage reservations.</p>
     <button class="action-button" onclick="window.location.reload()">Retry Connection</button>
-    <a href="tel:+919876543210" class="secondary-button">&#128222; Call Jainam Traders</a>
-
     <div class="shop-details">
       <strong>Jainam Traders Store</strong>
-      <p>Station Road, Main Market, City Center</p>
-      <p>Hours: 10:00 AM - 9:00 PM (Daily)</p>
+      <p>Reserve online &bull; Inspect and pay upon counter pickup</p>
+      <p>Hours: 07:30 AM - 09:30 PM (Mon-Sat, Closed Sun)</p>
       <p style="color: var(--primary); font-weight: 600; margin-bottom: 0;">Payment: Pay at Shop (Cash / UPI) &bull; Pickup Only</p>
     </div>
   </main>

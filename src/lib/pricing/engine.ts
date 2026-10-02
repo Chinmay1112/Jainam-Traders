@@ -120,3 +120,95 @@ export function calculateOrderPricing(
     appliedCoupon,
   };
 }
+
+/**
+ * Calculates discount percentage deterministically from MRP and Selling Price.
+ * Formula: Math.round(((mrp - sellingPrice) / mrp) * 100)
+ */
+export function calculateDiscountPercentage(mrp: number, sellingPrice: number): number {
+  if (!Number.isFinite(mrp) || !Number.isFinite(sellingPrice) || mrp <= 0 || sellingPrice <= 0) {
+    return 0;
+  }
+  if (sellingPrice >= mrp) {
+    return 0;
+  }
+  return Math.round(((mrp - sellingPrice) / mrp) * 100);
+}
+
+/**
+ * Formats discount presentation for UI badges and previews.
+ * Zero-discount products return 'No discount' (never '0% OFF').
+ */
+export function formatDiscountBadge(mrp: number, sellingPrice: number): string {
+  const discount = calculateDiscountPercentage(mrp, sellingPrice);
+  if (discount <= 0 || sellingPrice >= mrp) {
+    return 'No discount';
+  }
+  return `${discount}% OFF`;
+}
+
+export interface PricingValidationResult {
+  isValid: boolean;
+  error?: string;
+  mrp: number;
+  sellingPrice: number;
+  discountPercentage: number;
+}
+
+/**
+ * Strict server-side validation for Product Pricing:
+ * - MRP must be numeric, > 0, finite
+ * - Selling Price must be numeric, > 0, finite, <= MRP
+ * - Rejects NaN, Infinity, <= 0, negatives, non-numeric, sellingPrice > MRP
+ */
+export function validateProductPricing(mrpInput: unknown, sellingPriceInput: unknown): PricingValidationResult {
+  if (mrpInput === null || mrpInput === undefined || mrpInput === '') {
+    return { isValid: false, error: 'Real MRP is required', mrp: 0, sellingPrice: 0, discountPercentage: 0 };
+  }
+  if (sellingPriceInput === null || sellingPriceInput === undefined || sellingPriceInput === '') {
+    return { isValid: false, error: 'Selling price is required', mrp: 0, sellingPrice: 0, discountPercentage: 0 };
+  }
+
+  const mrp = Number(mrpInput);
+  const sellingPrice = Number(sellingPriceInput);
+
+  if (typeof mrpInput === 'boolean' || typeof sellingPriceInput === 'boolean') {
+    return { isValid: false, error: 'Price values cannot be boolean', mrp: 0, sellingPrice: 0, discountPercentage: 0 };
+  }
+
+  if (isNaN(mrp) || !Number.isFinite(mrp)) {
+    return { isValid: false, error: 'Real MRP must be a valid, finite numeric amount', mrp: 0, sellingPrice: 0, discountPercentage: 0 };
+  }
+
+  if (isNaN(sellingPrice) || !Number.isFinite(sellingPrice)) {
+    return { isValid: false, error: 'Selling price must be a valid, finite numeric amount', mrp: 0, sellingPrice: 0, discountPercentage: 0 };
+  }
+
+  if (mrp <= 0) {
+    return { isValid: false, error: 'Real MRP must be greater than zero', mrp, sellingPrice, discountPercentage: 0 };
+  }
+
+  if (sellingPrice <= 0) {
+    return { isValid: false, error: 'Selling price must be greater than zero', mrp, sellingPrice, discountPercentage: 0 };
+  }
+
+  if (sellingPrice > mrp) {
+    return {
+      isValid: false,
+      error: `Selling price cannot exceed MRP: Selling price (₹${sellingPrice}) cannot exceed MRP (₹${mrp})`,
+      mrp,
+      sellingPrice,
+      discountPercentage: 0,
+    };
+  }
+
+  const discountPercentage = calculateDiscountPercentage(mrp, sellingPrice);
+
+  return {
+    isValid: true,
+    mrp,
+    sellingPrice,
+    discountPercentage,
+  };
+}
+

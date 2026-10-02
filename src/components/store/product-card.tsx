@@ -22,6 +22,10 @@ export default function ProductCard({ product }: ProductCardProps) {
   const isInCart = items.some((i) => i.productId === product.id);
   const isAvailable = product.availability === 'AVAILABLE';
 
+  // Automatically calculate discount percentage from MRP and Selling Price (Never hardcoded)
+  const calculatedDiscount =
+    product.mrp > product.price ? Math.round(((product.mrp - product.price) / product.mrp) * 100) : 0;
+
   return (
     <div className="group bg-white rounded-2xl border border-stone-200/90 shadow-sm hover:shadow-elevated transition-all duration-200 flex flex-col overflow-hidden relative">
       {/* Image & Badges */}
@@ -39,9 +43,9 @@ export default function ProductCard({ product }: ProductCardProps) {
 
         {/* Top Badges */}
         <div className="absolute top-2 left-2 flex flex-col gap-1 z-10">
-          {product.discountPercentage > 0 && (
+          {calculatedDiscount > 0 && (
             <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-extrabold bg-brand-600 text-white shadow-sm">
-              {product.discountPercentage}% OFF
+              {calculatedDiscount}% OFF
             </span>
           )}
           {product.isBestSeller && (

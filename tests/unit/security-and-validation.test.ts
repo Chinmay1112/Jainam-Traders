@@ -36,7 +36,7 @@ describe('4. Security & Business Rule Validation', () => {
     const order = await createPickupOrder({
       customerId: 'cust-malicious',
       customerName: 'Hacker User',
-      customerPhone: '9876543210',
+      customerPhone: '9000000000',
       items: [{ productId: prod.id, quantity: 1 }],
       pickupMode: 'FLEXIBLE',
     });

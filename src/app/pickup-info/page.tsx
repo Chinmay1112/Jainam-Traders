@@ -10,8 +10,10 @@ import {
   Sparkles,
   Navigation,
   CheckCircle2,
+  Store,
 } from 'lucide-react';
 import { getShopSettings } from '@/lib/db/store-service';
+import { getShopDirectionsUrl } from '@/lib/utils';
 
 export const metadata = {
   title: 'Pickup Information & Store Counter | Jainam Traders',
@@ -32,7 +34,7 @@ export default async function PickupInfoPage() {
           How Store Pickup Works
         </h1>
         <p className="text-xs sm:text-sm text-stone-500 mt-1 max-w-2xl">
-          We are an authentic brick-and-mortar retail shop. Discover products online, reserve them without paying in advance, and collect at our Main Bazar counter.
+          We are an authentic brick-and-mortar retail shop. Discover products online, reserve them without paying in advance, and collect at our store counter.
         </p>
       </div>
 
@@ -108,14 +110,20 @@ export default async function PickupInfoPage() {
             </div>
 
             <div className="flex flex-wrap gap-3 pt-2">
-              <a
-                href={settings.googleMapsUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-5 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow"
-              >
-                <Navigation className="w-4 h-4" /> Open Google Maps
-              </a>
+              {getShopDirectionsUrl(settings) ? (
+                <a
+                  href={getShopDirectionsUrl(settings)!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-5 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow"
+                >
+                  <Navigation className="w-4 h-4" /> Get Directions
+                </a>
+              ) : (
+                <span className="px-5 py-2.5 bg-stone-200 text-stone-500 rounded-xl text-xs font-medium">
+                  Shop location is being configured.
+                </span>
+              )}
               <a
                 href={`https://wa.me/${settings.whatsappNumber.replace(/\D/g, '')}`}
                 target="_blank"
@@ -127,18 +135,19 @@ export default async function PickupInfoPage() {
             </div>
           </div>
 
-          <div className="relative h-64 sm:h-72 rounded-2xl overflow-hidden bg-stone-100 border border-stone-200">
-            <Image
-              src="https://images.unsplash.com/photo-1544717305-2782549b5136?w=800&auto=format&fit=crop&q=80"
-              alt="Jainam Traders Counter"
-              fill
-              className="object-cover"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent flex items-end p-5 text-white">
-              <div>
-                <p className="text-xs font-bold text-amber-400">Jainam Traders Counter</p>
-                <p className="text-[11px] text-stone-300">Dedicated pickup window with order verification</p>
+          <div className="relative h-64 sm:h-72 rounded-2xl overflow-hidden bg-gradient-to-br from-stone-900 via-stone-850 to-stone-950 border border-stone-700 p-6 flex flex-col justify-between text-white">
+            <div className="flex items-center justify-between">
+              <div className="w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                <Store className="w-6 h-6" />
               </div>
+              <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                Verified Counter
+              </span>
+            </div>
+            <div>
+              <p className="text-sm font-extrabold text-amber-400">Jainam Traders Counter</p>
+              <p className="text-xs text-stone-300 mt-1 leading-relaxed">{settings.shopAddress}</p>
+              <p className="text-[11px] text-emerald-400 font-bold mt-2">Dedicated pickup window with live item inspection</p>
             </div>
           </div>
         </div>

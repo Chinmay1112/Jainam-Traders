@@ -20,14 +20,18 @@ import {
   FileText,
 } from 'lucide-react';
 import { Order, OrderStatus } from '@/lib/types';
-import { formatINR, formatDate } from '@/lib/utils';
+import { formatINR, formatDate, getShopDirectionsUrl } from '@/lib/utils';
 import { getStatusBadgeInfo } from '@/lib/orders/state-machine';
+import { useShop } from '@/lib/context/shop-context';
+import { useSimpleMode } from '@/lib/context/simple-mode-context';
 
 interface OrderDetailViewProps {
   order: Order;
 }
 
 export default function OrderDetailView({ order: initialOrder }: OrderDetailViewProps) {
+  const shop = useShop();
+  const { isSimpleMode, speakText } = useSimpleMode();
   const [order, setOrder] = useState<Order>(initialOrder);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
@@ -48,13 +52,21 @@ export default function OrderDetailView({ order: initialOrder }: OrderDetailView
 
   const badge = getStatusBadgeInfo(order.status);
 
-  const timelineSteps: { status: OrderStatus; title: string; desc: string }[] = [
-    { status: 'PENDING', title: 'Order Reserved', desc: 'Received at Jainam Traders' },
-    { status: 'CONFIRMED', title: 'Confirmed by Shop', desc: 'Staff validated inventory' },
-    { status: 'PREPARING', title: 'Assembling Items', desc: 'Packing at counter' },
-    { status: 'READY_FOR_PICKUP', title: 'Ready for Pickup', desc: 'Waiting for you at shop' },
-    { status: 'PICKED_UP', title: 'Picked Up & Paid', desc: 'Payment completed at shop' },
-  ];
+  const timelineSteps: { status: OrderStatus; title: string; desc: string }[] = isSimpleMode
+    ? [
+        { status: 'PENDING', title: '🟡 बुकिंग मिली', desc: `${shop.shopName} को आपका ऑर्डर मिल गया है` },
+        { status: 'CONFIRMED', title: '🔵 दुकान ने स्वीकार किया', desc: 'सामान स्टॉक में उपलब्ध है' },
+        { status: 'PREPARING', title: '🔵 सामान तैयार हो रहा है', desc: 'काउंटर पर पैकिंग चल रही है' },
+        { status: 'READY_FOR_PICKUP', title: '🟢 सामान तैयार है', desc: 'दुकान से आकर ले जाएं' },
+        { status: 'PICKED_UP', title: '🏪 सामान ले लिया गया', desc: 'दुकान पर भुगतान पूरा हुआ' },
+      ]
+    : [
+        { status: 'PENDING', title: 'Order Reserved', desc: `Received at ${shop.shopName}` },
+        { status: 'CONFIRMED', title: 'Confirmed by Shop', desc: 'Staff validated inventory' },
+        { status: 'PREPARING', title: 'Assembling Items', desc: 'Packing at counter' },
+        { status: 'READY_FOR_PICKUP', title: 'Ready for Pickup', desc: 'Waiting for you at shop' },
+        { status: 'PICKED_UP', title: 'Picked Up & Paid', desc: 'Payment completed at shop' },
+      ];
 
   // Current step index
   const currentStep = badge.stepIndex;
@@ -233,7 +245,7 @@ export default function OrderDetailView({ order: initialOrder }: OrderDetailView
               Show this QR Code at the Counter
             </h3>
             <p className="text-xs text-stone-300 leading-relaxed">
-              When visiting Jainam Traders in Main Bazar, show this digital QR token or recite your Order ID{' '}
+              When visiting {shop.shopName} in {shop.shortAddress}, show this digital QR token or recite your Order ID{' '}
               <strong className="text-white font-mono">{order.orderNumber}</strong>. Our counter staff will retrieve your inspected order box.
             </p>
 
@@ -248,9 +260,9 @@ export default function OrderDetailView({ order: initialOrder }: OrderDetailView
               </div>
             </div>
 
-            <div className="flex gap-3 pt-2">
+            <div className="flex flex-wrap gap-2.5 pt-2">
               <a
-                href="https://wa.me/919876543210"
+                href={`https://wa.me/${shop.whatsappNumber.replace(/\D/g, '')}?text=${encodeURIComponent(`Hi ${shop.shopName}, I am inquiring about Order ${order.orderNumber}`)}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow"
@@ -258,11 +270,25 @@ export default function OrderDetailView({ order: initialOrder }: OrderDetailView
                 <MessageSquare className="w-3.5 h-3.5" /> WhatsApp Store
               </a>
               <a
-                href="tel:+919876543210"
+                href={`tel:${shop.phone.replace(/\s+/g, '')}`}
                 className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-stone-700"
               >
                 <Phone className="w-3.5 h-3.5" /> Call Counter
               </a>
+              {getShopDirectionsUrl(shop) ? (
+                <a
+                  href={getShopDirectionsUrl(shop)!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5"
+                >
+                  <MapPin className="w-3.5 h-3.5" /> Directions
+                </a>
+              ) : (
+                <span className="px-3 py-2 bg-stone-800 text-stone-400 rounded-xl text-xs font-medium">
+                  Shop location is being configured.
+                </span>
+              )}
             </div>
           </div>
 
@@ -302,13 +328,27 @@ export default function OrderDetailView({ order: initialOrder }: OrderDetailView
               <div className="flex-1 min-w-0">
                 <h4 className="text-xs sm:text-sm font-bold text-stone-900 truncate">{item.productName}</h4>
                 {item.variantName && <p className="text-[11px] text-stone-500">Variant: {item.variantName}</p>}
-                <p className="text-[11px] text-stone-500">
-                  {item.quantity} × {formatINR(item.unitPrice)}
-                </p>
+                <div className="flex flex-wrap items-center gap-2 mt-1 text-xs">
+                  {item.mrp && item.mrp > item.unitPrice ? (
+                    <>
+                      <span className="text-stone-400">MRP: <span className="line-through">{formatINR(item.mrp)}</span></span>
+                      <span className="font-bold text-stone-900">Price: {formatINR(item.unitPrice)}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-brand-50 text-brand-700 border border-brand-200">
+                        {item.discountPercentage ?? Math.round(((item.mrp - item.unitPrice) / item.mrp) * 100)}% OFF
+                      </span>
+                    </>
+                  ) : (
+                    <span className="font-bold text-stone-900">Price: {formatINR(item.unitPrice)}</span>
+                  )}
+                  <span className="text-stone-500">• Qty: {item.quantity}</span>
+                </div>
               </div>
-              <span className="text-xs sm:text-sm font-extrabold text-stone-900">
-                {formatINR(item.totalPrice)}
-              </span>
+              <div className="text-right">
+                <span className="text-[10px] text-stone-400 block font-medium">Total</span>
+                <span className="text-xs sm:text-sm font-extrabold text-stone-900">
+                  {formatINR(item.totalPrice)}
+                </span>
+              </div>
             </div>
           ))}
         </div>
@@ -358,9 +398,9 @@ export default function OrderDetailView({ order: initialOrder }: OrderDetailView
       {/* Printable Receipt (Hidden in screen view, visible during window.print()) */}
       <div id="printable-receipt" className="hidden">
         <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-          <h2 style={{ fontSize: '20px', fontWeight: 'bold' }}>JAINAM TRADERS</h2>
-          <p style={{ fontSize: '12px' }}>Shop No. 4 & 5, Mahaveer Market, Main Bazar Road</p>
-          <p style={{ fontSize: '12px' }}>Phone: +91 98765 43210 • Email: contact@jainamtraders.com</p>
+          <h2 style={{ fontSize: '20px', fontWeight: 'bold' }}>{shop.shopName.toUpperCase()}</h2>
+          <p style={{ fontSize: '12px' }}>{shop.shopAddress}</p>
+          <p style={{ fontSize: '12px' }}>Phone: {shop.phone} • Email: {shop.email}</p>
           <h3 style={{ fontSize: '16px', marginTop: '10px' }}>PICKUP ORDER RECEIPT</h3>
         </div>
 
@@ -455,7 +495,7 @@ export default function OrderDetailView({ order: initialOrder }: OrderDetailView
           <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4">
             <h3 className="text-base font-bold text-stone-900">Submit Counter Return Request</h3>
             <p className="text-xs text-stone-500">
-              Items must be in original packaging. You will bring the item to our Main Bazar counter for inspection.
+              Items must be in original packaging. You will bring the item to our store counter for inspection.
             </p>
             {actionError && <p className="text-xs text-rose-600">{actionError}</p>}
             <select

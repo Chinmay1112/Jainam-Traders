@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { executeAiSupportTool } from '@/lib/db/store-service';
+import { CANONICAL_SHOP_CONFIG } from '@/lib/config/shop-config';
 
 export async function POST(request: NextRequest) {
   try {
@@ -42,7 +43,7 @@ export async function POST(request: NextRequest) {
     ) {
       escalateToHuman = true;
       responseText =
-        "I've flagged your conversation for our store manager. You can also directly call our shop counter at +91 98765 43210 or chat with us on WhatsApp.";
+        `I've flagged your conversation for our store manager. You can also directly call our shop counter at ${CANONICAL_SHOP_CONFIG.phone} or chat with us on WhatsApp at ${CANONICAL_SHOP_CONFIG.whatsappNumber}.`;
     } else if (
       userMessage.includes('hour') ||
       userMessage.includes('time') ||
@@ -54,7 +55,7 @@ export async function POST(request: NextRequest) {
     ) {
       const dataStr = await executeAiSupportTool('get_shop_information', {});
       const info = JSON.parse(dataStr);
-      responseText = `Jainam Traders is located at: ${info.address}.\nOur store timings are ${info.openingTime} AM to ${info.closingTime} PM (Closed on ${info.weeklyClosedDays.join(', ')}).\nPickup Counter Instructions: ${info.pickupInstructions}`;
+      responseText = `${CANONICAL_SHOP_CONFIG.shopName} is located at: ${info.address || CANONICAL_SHOP_CONFIG.shopAddress}.\nOur store timings are ${info.openingTime || CANONICAL_SHOP_CONFIG.openingTime} AM to ${info.closingTime || CANONICAL_SHOP_CONFIG.closingTime} PM (Closed on ${(info.weeklyClosedDays || CANONICAL_SHOP_CONFIG.weeklyClosedDays).join(', ')}).\nPickup Counter Instructions: ${info.pickupInstructions || CANONICAL_SHOP_CONFIG.pickupInstructions}`;
     } else if (userMessage.includes('return') || userMessage.includes('refund') || userMessage.includes('exchange')) {
       const policyStr = await executeAiSupportTool('get_return_policy', {});
       const policy = JSON.parse(policyStr);
@@ -90,7 +91,9 @@ export async function POST(request: NextRequest) {
       const items = JSON.parse(resultsStr);
 
       if (items.length === 0) {
-        responseText = `I searched our live catalogue for "${keyword}", but did not find an exact match. Please check our Categories page or feel free to WhatsApp us directly at +91 98765 43210!`;
+        responseText = CANONICAL_SHOP_CONFIG.whatsappNumber
+          ? `I searched our live catalogue for "${keyword}", but did not find an exact match. Please check our Categories page or feel free to WhatsApp us directly at ${CANONICAL_SHOP_CONFIG.whatsappNumber}!`
+          : `I searched our live catalogue for "${keyword}", but did not find an exact match. Please check our Categories page or visit our store counter for assistance!`;
       } else {
         const productList = items
           .map((i: { name: string; price: string; availability: string }) => `• ${i.name} - ${i.price} (${i.availability})`)

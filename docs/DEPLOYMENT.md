@@ -44,16 +44,66 @@ npm run test:watch
 ## 4. Production Database Deployment (Supabase)
 1. Create a project at [supabase.com](https://supabase.com).
 2. Go to the **SQL Editor** in your Supabase project dashboard.
-3. Run the migrations in sequence:
-   - `supabase/migrations/20260929_init_schema.sql` (Creates all tables, enums, indexes, and atomic RPC functions)
-   - `supabase/migrations/20260929_rls_policies.sql` (Applies Row Level Security)
-   - `supabase/seed.sql` (Seeds initial shop settings, categories, 30 retail products, coupons, and offers)
+3. Run the migrations strictly in this sequential order:
+   - `supabase/migrations/20260929_init_schema.sql` (Creates core tables, enums, indexes, and order structures)
+   - `supabase/migrations/20260929_rls_policies.sql` (Applies Row Level Security isolation)
+   - `supabase/migrations/20261002_crm_gift_codes_atomic.sql` (Atomic gift code redemption, customer notes, activity ledger)
+   - `supabase/migrations/20261002_product_duplicate_prevention.sql` (Unique SKU & barcode constraint indexes)
+   - `supabase/migrations/20261002_production_order_concurrency_idempotency.sql` (Order idempotency, EXPIRED status, atomic counter payments, cron cleanup)
 4. Retrieve your **Project URL**, **Anon Public Key**, and **Service Role Key** from Supabase Project Settings -> API.
-5. Add them to your production environment variables (e.g., in Vercel, Netlify, or Docker).
+5. Create a public Supabase Storage bucket named `product-media`.
+6. Add the credentials to your production environment variables (e.g. Vercel or cloud host).
 
 ---
 
-## 5. Mobile Packaging with Capacitor
+## 5. Production Scheduled Tasks (Cron)
+To automatically release abandoned pickup reservations:
+1. Configure an external cron monitor or Vercel Cron to send an HTTP POST every 15-30 minutes:
+   - Endpoint: `https://<your-domain>/api/orders/cleanup-expired`
+   - Header: `Authorization: Bearer <CRON_SECRET>`
+2. This runs `cleanupExpiredReservations`, releasing reserved stock back to the shelf for orders past their reservation deadline.
+
+---
+
+## 6. Backup, Disaster Recovery & Storage Recovery
+1. **Automated Backups:**
+   - In Supabase Dashboard -> Database -> Backups:
+   - Ensure automated daily backups are active (retained for 7 to 30 days depending on plan).
+   - For enterprise resilience, enable Point-In-Time-Recovery (PITR).
+2. **Manual Physical Backup Command:**
+   ```bash
+   pg_dump -h db.<project-ref>.supabase.co -U postgres -d postgres --clean --if-exists > jainam_backup_$(date +%Y%m%d).sql
+   ```
+3. **Restoration Procedure:**
+   - To restore a dump:
+     ```bash
+     psql -h db.<project-ref>.supabase.co -U postgres -d postgres < jainam_backup_YYYYMMDD.sql
+     ```
+   - If a migration fails mid-way, inspect error logs in Supabase SQL editor, rollback the specific statement, and re-apply cleanly.
+4. **Storage Recovery:**
+   - Storage files in `product-media` are linked to product rows via `images` array.
+   - If storage is corrupted, restore bucket from backup snapshot or re-upload images from admin media tab.
+5. **Authorized Person:** Only Store Owner / Database Administrator with Supabase root access should execute restoration.
+
+---
+
+## 7. Thermal Barcode Printer Calibration (TSC TTP-244 Pro)
+1. **Physical Label Size:** 60 mm (width) × 24 mm (height) LANDSCAPE roll.
+2. **Printer Driver Settings:**
+   - Driver: Seagull Scientific or TSC Official Driver
+   - Page Setup: Width: 60mm, Height: 24mm, Orientation: Landscape
+   - Media Type: Die-Cut Label with Gap (Gap Height: 2mm - 3mm)
+3. **Browser Print Settings:**
+   - Margins: None (0 mm)
+   - Scale: 100% (Do not fit to printable area)
+   - Layout: Landscape
+4. **Calibration Test:**
+   - Open `/admin`, select any product, and click **Print Label**.
+   - Print a single test label and scan with handheld barcode scanner or phone camera to verify 100% scannability.
+
+---
+
+## 8. Mobile Packaging with Capacitor
 
 ### Android Build
 ```bash
@@ -85,22 +135,22 @@ npx cap open ios
 
 ---
 
-## 6. Admin Bootstrap Instructions
+## 9. Admin Bootstrap Instructions
 1. For initial store setup, set `ADMIN_BOOTSTRAP_SECRET` and `ADMIN_INITIAL_EMAIL` in `.env.local`.
-2. When launching the admin portal at `/admin`, the store owner can log in or switch roles between:
-   - **Owner / Admin**: Full control over shop settings, categories, pricing, products, staff roles, and analytics.
-   - **Store Manager**: Order workflow management, stock adjustments, pickup verification, and refund recording.
-   - **Counter Staff**: Scanning customer order QR passes, marking orders as preparing/ready/picked up.
+2. Access `/admin` to log in using standard staff authentication with role-based access:
+   - **Owner / Admin**: Full management of products, pricing, inventory, staff accounts, analytics, duplicate merges, and audit logs.
+   - **Store Manager**: Order processing, inventory adjustments, pickup verification, customer CRM notes, and returns.
+   - **Counter Staff**: Customer order lookup, QR verification, marking orders preparing/ready/picked up, and recording counter payments (Cash/UPI).
 
 ---
 
-## 7. Production Launch Checklist
+## 10. Production Launch Checklist
 - [x] All client prices are recalculated server-side
 - [x] Concurrency test passed: two customers cannot order the final unit simultaneously
+- [x] Order idempotency key prevents duplicate orders on network retries
 - [x] Raw stock counts are hidden from customer interfaces
-- [x] State machine enforces valid order transitions
-- [x] Digital QR pass generated for every order
-- [x] Thermal/A4 printable receipt formatted
-- [x] PWA web manifest and offline service worker configured
-- [x] Native Android and iOS projects generated with Capacitor
-- [x] Real database migrations and realistic seed data provided
+- [x] Authoritative Google Maps URL verified: `https://maps.app.goo.gl/8ZJCWbBVtrHep7UcA` (22.2765869, 75.7979897)
+- [x] Live Gmail SMTP connected and verified for `jainamtraders82@gmail.com`
+- [x] Wishlist permanently visible in customer header with badge count
+- [x] 265/265 automated test suite passed
+- [x] Zero TypeScript or build errors (53/53 routes compiled)

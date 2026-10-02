@@ -139,4 +139,24 @@ describe('2. Order State Machine Transition & Authorization', () => {
     expect(canTransitionOrder('RETURN_APPROVED', 'RETURNED', 'store_manager').allowed).toBe(true);
     expect(canTransitionOrder('RETURNED', 'REFUND_RECORDED', 'store_manager').allowed).toBe(true);
   });
+
+  it('allows staff and admin to cancel orders across all active states (PENDING, CONFIRMED, PREPARING, READY_FOR_PICKUP)', () => {
+    // Admin cancellations
+    expect(canTransitionOrder('PENDING', 'CANCELLED', 'admin').allowed).toBe(true);
+    expect(canTransitionOrder('CONFIRMED', 'CANCELLED', 'admin').allowed).toBe(true);
+    expect(canTransitionOrder('PREPARING', 'CANCELLED', 'admin').allowed).toBe(true);
+    expect(canTransitionOrder('READY_FOR_PICKUP', 'CANCELLED', 'admin').allowed).toBe(true);
+
+    // Staff cancellations when customer calls counter
+    expect(canTransitionOrder('PENDING', 'CANCELLED', 'staff').allowed).toBe(true);
+    expect(canTransitionOrder('CONFIRMED', 'CANCELLED', 'staff').allowed).toBe(true);
+    expect(canTransitionOrder('PREPARING', 'CANCELLED', 'staff').allowed).toBe(true);
+    expect(canTransitionOrder('READY_FOR_PICKUP', 'CANCELLED', 'staff').allowed).toBe(true);
+  });
+
+  it('disallows cancelling terminal orders (PICKED_UP, CANCELLED, REFUND_RECORDED)', () => {
+    expect(canTransitionOrder('PICKED_UP', 'CANCELLED', 'admin').allowed).toBe(false);
+    expect(canTransitionOrder('CANCELLED', 'CANCELLED', 'admin').allowed).toBe(false);
+    expect(canTransitionOrder('REFUND_RECORDED', 'CANCELLED', 'admin').allowed).toBe(false);
+  });
 });

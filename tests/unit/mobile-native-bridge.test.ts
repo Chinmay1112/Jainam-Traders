@@ -10,23 +10,23 @@ import {
 describe('Mobile Native Bridge & Intents', () => {
   it('correctly formats phone dialer intents', () => {
     // Should return tel: URI format
-    const phone = '+91 98765 43210';
+    const phone = '+91 90000 00000';
     const cleaned = phone.replace(/[^0-9+]/g, '');
-    expect(cleaned).toBe('+919876543210');
+    expect(cleaned).toBe('+919000000000');
   });
 
   it('correctly constructs contextual WhatsApp links', () => {
     const orderNumber = 'JT-2026-000123';
     const message = `Hi Jainam Traders, I have an inquiry about order ${orderNumber}.`;
     const encoded = encodeURIComponent(message);
-    const waUrl = `https://wa.me/919876543210?text=${encoded}`;
+    const waUrl = `https://wa.me/919000000000?text=${encoded}`;
 
-    expect(waUrl).toContain('wa.me/919876543210');
+    expect(waUrl).toContain('wa.me/919000000000');
     expect(waUrl).toContain(encodeURIComponent('order JT-2026-000123'));
   });
 
   it('generates accurate Google Maps directions link for physical pickup store', () => {
-    const storeAddress = 'Jainam Traders, Station Road, Main Market, City Center';
+    const storeAddress = 'Jainam Traders';
     const directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(storeAddress)}`;
 
     expect(directionsUrl).toContain('google.com/maps/dir');

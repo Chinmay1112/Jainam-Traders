@@ -4,6 +4,9 @@ import {
   createPickupOrder,
   transitionOrderStatus,
   getRawProductById,
+  cleanupExpiredReservations,
+  recordOrderPayment,
+  storeDb,
 } from '@/lib/db/store-service';
 
 describe('3. Critical Concurrency & Inventory Reservation Engine', () => {
@@ -35,7 +38,7 @@ describe('3. Critical Concurrency & Inventory Reservation Engine', () => {
     const customerAOrderPromise = createPickupOrder({
       customerId: 'cust-race-a',
       customerName: 'Aarav Sharma',
-      customerPhone: '9876543210',
+      customerPhone: '9000000001',
       items: [{ productId: testProduct.id, quantity: 1 }],
       pickupMode: 'FLEXIBLE',
     });
@@ -43,7 +46,7 @@ describe('3. Critical Concurrency & Inventory Reservation Engine', () => {
     const customerBOrderPromise = createPickupOrder({
       customerId: 'cust-race-b',
       customerName: 'Bhavna Patel',
-      customerPhone: '9876543211',
+      customerPhone: '9000000002',
       items: [{ productId: testProduct.id, quantity: 1 }],
       pickupMode: 'FLEXIBLE',
     });
@@ -99,7 +102,7 @@ describe('3. Critical Concurrency & Inventory Reservation Engine', () => {
     const order = await createPickupOrder({
       customerId: 'cust-cancel-test',
       customerName: 'Dev Customer',
-      customerPhone: '9876543210',
+      customerPhone: '9000000003',
       items: [{ productId: prod.id, quantity: 1 }],
       pickupMode: 'FLEXIBLE',
     });
@@ -143,7 +146,7 @@ describe('3. Critical Concurrency & Inventory Reservation Engine', () => {
     const order = await createPickupOrder({
       customerId: 'cust-pickup-test',
       customerName: 'Rohan Gupta',
-      customerPhone: '9876543210',
+      customerPhone: '9000000004',
       items: [{ productId: prod.id, quantity: 2 }],
       pickupMode: 'FLEXIBLE',
     });
@@ -161,5 +164,188 @@ describe('3. Critical Concurrency & Inventory Reservation Engine', () => {
     const checkProd = await getRawProductById(prod.id);
     expect(checkProd?.stockQuantity).toBe(3);
     expect(checkProd?.reservedStock).toBe(0);
+  });
+
+  it('enforces order idempotency: retried order request with same idempotencyKey returns existing order without double-booking stock', async () => {
+    const prod = await createAdminProduct({
+      name: 'Limited Edition Desk Clock',
+      sku: `JT-IDEM-${Date.now()}`,
+      slug: `limited-desk-clock-${Date.now()}`,
+      categoryId: 'b0000000-0000-0000-0000-000000000003',
+      description: 'Clock for idempotency verification',
+      price: 1200,
+      mrp: 1500,
+      thumbnailUrl: '',
+      images: [],
+      stockQuantity: 2,
+      lowStockThreshold: 1,
+      minOrderQuantity: 1,
+      maxOrderQuantity: 5,
+      tags: [],
+      brand: 'Titan JT',
+      isFeatured: false,
+      isNewArrival: false,
+      isBestSeller: false,
+      isActive: true,
+    });
+
+    const idempotencyKey = `idem-key-${Date.now()}`;
+
+    // First attempt: Places order
+    const order1 = await createPickupOrder({
+      customerId: 'cust-idem-test',
+      customerName: 'Sanjay Jain',
+      customerPhone: '9000000000',
+      idempotencyKey,
+      items: [{ productId: prod.id, quantity: 1 }],
+      pickupMode: 'FLEXIBLE',
+    });
+
+    expect(order1).toBeDefined();
+    expect(order1.idempotencyKey).toBe(idempotencyKey);
+
+    const prodAfterFirst = await getRawProductById(prod.id);
+    expect(prodAfterFirst?.reservedStock).toBe(1);
+
+    // Second attempt (simulating duplicate click or network retry with same idempotencyKey)
+    const order2 = await createPickupOrder({
+      customerId: 'cust-idem-test',
+      customerName: 'Sanjay Jain',
+      customerPhone: '9000000000',
+      idempotencyKey,
+      items: [{ productId: prod.id, quantity: 1 }],
+      pickupMode: 'FLEXIBLE',
+    });
+
+    // Must return the exact same order
+    expect(order2.id).toBe(order1.id);
+    expect(order2.orderNumber).toBe(order1.orderNumber);
+
+    // Reserved stock must NOT be double deducted! Still 1, not 2.
+    const prodAfterRetry = await getRawProductById(prod.id);
+    expect(prodAfterRetry?.reservedStock).toBe(1);
+  });
+
+  it('cleans up expired pickup reservations and releases reserved inventory idempotently', async () => {
+    const prod = await createAdminProduct({
+      name: 'Antique Wall Mirror',
+      sku: `JT-EXP-${Date.now()}`,
+      slug: `antique-wall-mirror-${Date.now()}`,
+      categoryId: 'b0000000-0000-0000-0000-000000000001',
+      description: 'Mirror for expiry cleanup test',
+      price: 1800,
+      mrp: 2400,
+      thumbnailUrl: '',
+      images: [],
+      stockQuantity: 4,
+      lowStockThreshold: 1,
+      minOrderQuantity: 1,
+      maxOrderQuantity: 5,
+      tags: [],
+      brand: 'Jainam Heritage',
+      isFeatured: false,
+      isNewArrival: false,
+      isBestSeller: false,
+      isActive: true,
+    });
+
+    const order = await createPickupOrder({
+      customerId: 'cust-expiry-test',
+      customerName: 'Vikas Shah',
+      customerPhone: '9000000000',
+      items: [{ productId: prod.id, quantity: 2 }],
+      pickupMode: 'FLEXIBLE',
+    });
+
+    const checkReserved = await getRawProductById(prod.id);
+    expect(checkReserved?.reservedStock).toBe(2);
+
+    // Manually backdate the order's reservationExpiresAt to simulate elapsed window
+    const targetOrder = storeDb.orders.find((o) => o.id === order.id);
+    expect(targetOrder).toBeDefined();
+    targetOrder!.reservationExpiresAt = new Date(Date.now() - 3600000).toISOString(); // 1 hour ago
+
+    // Run cleanup
+    const cleanupResult = await cleanupExpiredReservations('test_cron');
+    expect(cleanupResult.expiredCount).toBeGreaterThanOrEqual(1);
+    expect(cleanupResult.expiredOrderNumbers).toContain(order.orderNumber);
+
+    // Order status should be EXPIRED
+    expect(targetOrder!.status).toBe('EXPIRED');
+
+    // Reserved stock must be released back to catalogue
+    const checkReleased = await getRawProductById(prod.id);
+    expect(checkReleased?.reservedStock).toBe(0);
+
+    // Second cleanup run must be idempotent (0 additional orders expired)
+    const secondCleanup = await cleanupExpiredReservations('test_cron');
+    expect(secondCleanup.expiredOrderNumbers).not.toContain(order.orderNumber);
+    const checkStillZero = await getRawProductById(prod.id);
+    expect(checkStillZero?.reservedStock).toBe(0);
+  });
+
+  it('records counter payment correctly, tracking partial and full payments', async () => {
+    const prod = await createAdminProduct({
+      name: 'Silver Plated Pooja Thali',
+      sku: `JT-PAY-${Date.now()}`,
+      slug: `silver-pooja-thali-${Date.now()}`,
+      categoryId: 'b0000000-0000-0000-0000-000000000001',
+      description: 'Pooja thali for payment recording test',
+      price: 1000,
+      mrp: 1500,
+      thumbnailUrl: '',
+      images: [],
+      stockQuantity: 5,
+      lowStockThreshold: 1,
+      minOrderQuantity: 1,
+      maxOrderQuantity: 5,
+      tags: [],
+      brand: 'Jainam Devotional',
+      isFeatured: false,
+      isNewArrival: false,
+      isBestSeller: false,
+      isActive: true,
+    });
+
+    const order = await createPickupOrder({
+      customerId: 'cust-pay-test',
+      customerName: 'Meena Jain',
+      customerPhone: '9000000000',
+      items: [{ productId: prod.id, quantity: 1 }],
+      pickupMode: 'FLEXIBLE',
+    });
+
+    expect(order.paymentStatus).toBe('UNPAID');
+    expect(order.amountDue).toBe(1000);
+    expect(order.amountReceived).toBe(0);
+
+    // 1. Partial payment at counter (e.g. ₹400 cash deposit)
+    const partialOrder = await recordOrderPayment({
+      orderId: order.id,
+      amountReceived: 400,
+      paymentMethod: 'Cash',
+      staffId: 'staff-counter-01',
+      staffRole: 'staff',
+      notes: 'Initial advance cash payment',
+    });
+
+    expect(partialOrder.paymentStatus).toBe('PARTIALLY_PAID');
+    expect(partialOrder.amountReceived).toBe(400);
+    expect(partialOrder.amountDue).toBe(600);
+    expect(partialOrder.paymentRecordedBy).toBe('staff-counter-01');
+
+    // 2. Final settlement at counter (remaining ₹600 via UPI)
+    const paidOrder = await recordOrderPayment({
+      orderId: order.id,
+      amountReceived: 600,
+      paymentMethod: 'UPI',
+      staffId: 'staff-counter-01',
+      staffRole: 'staff',
+      notes: 'Final UPI balance settlement',
+    });
+
+    expect(paidOrder.paymentStatus).toBe('PAID');
+    expect(paidOrder.amountReceived).toBe(1000);
+    expect(paidOrder.amountDue).toBe(0);
   });
 });

@@ -223,7 +223,7 @@ describe('2. Product Management CRUD (Create, Edit, Archive, Restore)', () => {
       createPickupOrder({
         customerId: 'cust-test-1',
         customerName: 'Test Customer',
-        customerPhone: '9876543210',
+        customerPhone: '9000000000',
         pickupMode: 'FLEXIBLE',
         items: [
           {
@@ -314,7 +314,7 @@ describe('4. Regression: Order Flow, Reservation, Cancellation & Pickup', () => 
     const order = await createPickupOrder({
       customerId: 'cust-reg-1',
       customerName: 'Regression Tester',
-      customerPhone: '9876543210',
+      customerPhone: '9000000000',
       pickupMode: 'FLEXIBLE',
       items: [{ productId: prod.id, quantity: 2 }],
     });
@@ -338,7 +338,7 @@ describe('4. Regression: Order Flow, Reservation, Cancellation & Pickup', () => 
     const order2 = await createPickupOrder({
       customerId: 'cust-reg-2',
       customerName: 'Pickup Customer',
-      customerPhone: '9876543210',
+      customerPhone: '9000000000',
       pickupMode: 'FLEXIBLE',
       items: [{ productId: prod.id, quantity: 1 }],
     });

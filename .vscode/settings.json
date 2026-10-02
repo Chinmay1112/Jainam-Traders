@@ -1,0 +1,15 @@
+{
+  "gradle.nestedProjects": [
+    "android"
+  ],
+  "java.import.exclusions": [
+    "**/node_modules/**",
+    "**/.kilo/**"
+  ],
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/**": true,
+    "**/.kilo/**": true
+  }
+}

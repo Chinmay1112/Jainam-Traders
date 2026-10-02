@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   archiveAdminProduct,
+  deleteAdminProductPermanent,
   getRawProductById,
   unarchiveAdminProduct,
   updateAdminProduct,
 } from '@/lib/db/store-service';
+import { enforceStaffRole, getAuthenticatedStaffFromRequest } from '@/lib/auth/server-guard';
 
 export async function GET(
   request: NextRequest,
@@ -16,6 +18,14 @@ export async function GET(
     if (!product) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 });
     }
+
+    const staffSession = getAuthenticatedStaffFromRequest(request);
+    // If not authenticated staff, strip internal warehouse stock numbers
+    if (!staffSession) {
+      const { stockQuantity: _, reservedStock: __, lowStockThreshold: ___, ...customerSafe } = product;
+      return NextResponse.json({ product: customerSafe });
+    }
+
     return NextResponse.json({ product });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to fetch product';
@@ -27,19 +37,17 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  try {
-    const actorRole = request.headers.get('x-user-role') || 'admin';
-    if (actorRole === 'customer') {
-      return NextResponse.json(
-        { error: 'Unauthorized: Only staff and admin can edit products' },
-        { status: 403 }
-      );
-    }
+  // Only Owner and Store Manager can edit products
+  const auth = enforceStaffRole(request, ['owner', 'store_manager']);
+  if ('errorResponse' in auth) {
+    return auth.errorResponse;
+  }
 
+  try {
     const { id } = await params;
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
-    const actorId = request.headers.get('x-user-id') || 'admin-session';
+    const actorId = auth.session.staffId;
 
     if (action === 'archive') {
       const product = await archiveAdminProduct(id, actorId);
@@ -52,6 +60,15 @@ export async function PATCH(
     }
 
     const body = await request.json();
+
+    // Counter Staff and Store Manager CANNOT change product prices. Only Owner/Admin can change prices.
+    if ((body.price !== undefined || body.mrp !== undefined) && auth.session.role !== 'owner') {
+      return NextResponse.json(
+        { error: 'Forbidden: Only the Store Owner can change product pricing' },
+        { status: 403 }
+      );
+    }
+
     const product = await updateAdminProduct(id, body, actorId);
     return NextResponse.json({ success: true, product });
   } catch (err: unknown) {
@@ -64,19 +81,26 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // Only Owner and Store Manager can archive products
+  const auth = enforceStaffRole(request, ['owner', 'store_manager']);
+  if ('errorResponse' in auth) {
+    return auth.errorResponse;
+  }
+
   try {
-    const actorRole = request.headers.get('x-user-role') || 'admin';
-    if (actorRole === 'customer') {
-      return NextResponse.json(
-        { error: 'Unauthorized: Customers cannot archive products' },
-        { status: 403 }
-      );
+    const { id } = await params;
+    const actorId = auth.session.staffId;
+    const isPermanent = request.nextUrl.searchParams.get('permanent') === 'true';
+
+    if (isPermanent) {
+      const product = await deleteAdminProductPermanent(id, actorId);
+      return NextResponse.json({
+        success: true,
+        product,
+        message: 'Product permanently deleted',
+      });
     }
 
-    const { id } = await params;
-    const actorId = request.headers.get('x-user-id') || 'admin-session';
-
-    // Soft delete / Archive: never hard-delete products with historical orders
     const product = await archiveAdminProduct(id, actorId);
     return NextResponse.json({
       success: true,
@@ -84,7 +108,7 @@ export async function DELETE(
       message: 'Product archived successfully (preserved for historical orders & reviews)',
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to archive product';
+    const message = err instanceof Error ? err.message : 'Failed to delete product';
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

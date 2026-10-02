@@ -123,8 +123,8 @@ The application handles both custom schemes and verified HTTPS universal/app lin
 - "Get Directions" button triggers [openMapDirections()](file:///d:/shop%20app/src/lib/native/capacitor-bridge.ts), launching Google Maps or Apple Maps with the shop's exact destination address.
 
 ### 5.4 Phone Dialer & WhatsApp Integration
-- "Call Jainam Traders": Opens native phone dialer (`tel:+919876543210`) with user confirmation.
-- "WhatsApp Jainam Traders": Opens WhatsApp (`https://wa.me/919876543210?text=...`) prefilled with order details (e.g. *"Hi Jainam Traders, I have an inquiry about order JT-2026-000123."*).
+- "Call Jainam Traders": Opens native phone dialer (`tel:<canonical_shop_phone>`) with user confirmation.
+- "WhatsApp Jainam Traders": Opens WhatsApp (`https://wa.me/<canonical_whatsapp_number>?text=...`) prefilled with order details (e.g. *"Hi Jainam Traders, I have an inquiry about order JT-2026-000123."*).
 
 ### 5.5 Native Sharing
 - Web Share API and `@capacitor/share` invoked with canonical public URLs.

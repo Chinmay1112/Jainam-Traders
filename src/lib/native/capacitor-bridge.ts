@@ -8,8 +8,8 @@ import { SplashScreen } from '@capacitor/splash-screen';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 import { PushNotifications } from '@capacitor/push-notifications';
 
-export const isNative = Capacitor.isNativePlatform();
-export const getPlatform = () => Capacitor.getPlatform(); // 'android' | 'ios' | 'web'
+export const isNative = typeof window !== 'undefined' ? Capacitor.isNativePlatform() : false;
+export const getPlatform = () => (typeof window !== 'undefined' ? Capacitor.getPlatform() : 'web');
 
 /**
  * 1. STATUS BAR & SPLASH INITIALIZER

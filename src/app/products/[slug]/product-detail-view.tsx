@@ -17,6 +17,7 @@ import {
   Tag,
   Sparkles,
   Camera,
+  Play,
 } from 'lucide-react';
 import ProductImage from '@/components/ui/product-image';
 import { CustomerProductView, ProductVariant, Review } from '@/lib/types';
@@ -24,6 +25,8 @@ import { formatINR } from '@/lib/utils';
 import { useCart } from '@/lib/context/cart-context';
 import { useWishlist } from '@/lib/context/wishlist-context';
 import { useAuth } from '@/lib/context/auth-context';
+import { useSimpleMode } from '@/lib/context/simple-mode-context';
+import { useShop } from '@/lib/context/shop-context';
 import AuthModal from '@/components/auth/auth-modal';
 import ProductCard from '@/components/store/product-card';
 import { nativeShareProduct, triggerHaptic, capturePhotoOrPick } from '@/lib/native/capacitor-bridge';
@@ -41,6 +44,7 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
   const { user } = useAuth();
 
   const [selectedImage, setSelectedImage] = useState(product.thumbnailUrl);
+  const [activeMedia, setActiveMedia] = useState<'image' | 'video'>('image');
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | undefined>(
     product.variants && product.variants.length > 0 ? product.variants[0] : undefined
   );
@@ -63,6 +67,35 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
   const isAvailable = product.availability === 'AVAILABLE';
 
   const currentPrice = selectedVariant?.priceOverride || product.price;
+  const discountPct = product.mrp > currentPrice ? Math.round(((product.mrp - currentPrice) / product.mrp) * 100) : 0;
+
+  const { isSimpleMode } = useSimpleMode();
+  const { shopSettings } = useShop();
+  const [showSpecs, setShowSpecs] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  const handleSpeakProduct = () => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    if (isSpeaking) {
+      setIsSpeaking(false);
+      return;
+    }
+    let text = `इसकी कीमत ${currentPrice} रुपये है।`;
+    if (product.mrp > currentPrice && discountPct > 0) {
+      text += ` MRP ${product.mrp} रुपये है। आपको ${discountPct} प्रतिशत की बचत हो रही है।`;
+    }
+    text += ` यह दुकान पर ${isAvailable ? 'उपलब्ध है' : 'अभी उपलब्ध नहीं है'}।`;
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'hi-IN';
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+    setIsSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const [authMessage, setAuthMessage] = useState('Please sign in to reserve this item.');
 
   const handleAddToCart = () => {
     triggerHaptic('light');
@@ -72,6 +105,11 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
   const handleReserveNow = () => {
     triggerHaptic('light');
     addItem(product, selectedVariant, quantity);
+    if (!user) {
+      setAuthMessage('Please sign in to reserve this item.');
+      setIsAuthModalOpen(true);
+      return;
+    }
     router.push('/checkout');
   };
 
@@ -138,9 +176,182 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
     }
   };
 
-  const allImages = [product.thumbnailUrl, ...(product.images || [])].filter(
-    (val, idx, self) => self.indexOf(val) === idx
-  );
+  const allImages = [product.thumbnailUrl, ...(product.images || [])]
+    .filter((val): val is string => Boolean(val && val.trim().length > 0))
+    .filter((val, idx, self) => self.indexOf(val) === idx);
+
+  if (isSimpleMode) {
+    return (
+      <div className="max-w-2xl mx-auto space-y-6 pb-12">
+        <button
+          onClick={() => router.back()}
+          className="flex items-center gap-2 text-stone-700 font-bold px-4 py-2 bg-stone-100 rounded-xl hover:bg-stone-200 transition-colors"
+        >
+          ← वापस जाएं (Go Back)
+        </button>
+
+        <div className="bg-white rounded-3xl p-6 border-2 border-stone-200 shadow-md space-y-6">
+          <div className="relative aspect-square w-full rounded-2xl overflow-hidden bg-stone-100 border border-stone-200 shadow-sm">
+            {activeMedia === 'video' && product.videoUrl ? (
+              <video
+                src={product.videoUrl}
+                controls
+                muted
+                playsInline
+                className="w-full h-full object-contain bg-black"
+              />
+            ) : (
+              <ProductImage
+                src={selectedImage}
+                alt={product.name}
+                fill
+                priority
+                sizes="(max-width: 768px) 100vw, 600px"
+                categoryName={product.categoryName}
+                className="object-cover"
+              />
+            )}
+          </div>
+
+          {product.videoUrl && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={() => setActiveMedia(activeMedia === 'video' ? 'image' : 'video')}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold bg-stone-100 hover:bg-stone-200 text-stone-800 transition-colors border border-stone-200 shadow-2xs"
+              >
+                <Play className="w-4 h-4 text-brand-600 fill-current" />
+                {activeMedia === 'video' ? '📷 फोटो देखें (View Photos)' : '▶ वीडियो देखें (Watch Video)'}
+              </button>
+            </div>
+          )}
+
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-stone-900 leading-tight">
+            {product.name}
+          </h1>
+
+          <div className="space-y-1">
+            <div className="text-3xl sm:text-4xl font-black text-brand-600">
+              {formatINR(currentPrice)}
+            </div>
+            {product.mrp > currentPrice && (
+              <div className="text-base text-stone-500 font-medium">
+                पहले <span className="line-through">{formatINR(product.mrp)}</span>
+              </div>
+            )}
+            {discountPct > 0 && (
+              <div className="inline-block mt-1 px-3 py-1 bg-emerald-100 text-emerald-800 rounded-xl font-black text-sm">
+                🎉 {discountPct}% की बचत
+              </div>
+            )}
+          </div>
+
+          <div className="p-3 rounded-2xl text-center font-bold text-base">
+            {isAvailable ? (
+              <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-4 py-2 rounded-xl inline-flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
+                🟢 दुकान पर उपलब्ध है (Available at Shop)
+              </span>
+            ) : (
+              <span className="text-rose-700 bg-rose-50 border border-rose-200 px-4 py-2 rounded-xl inline-flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full bg-rose-500" />
+                🔴 अभी उपलब्ध नहीं है (Currently Out of Stock)
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 sm:gap-4">
+            <button
+              type="button"
+              onClick={() => toggleWishlist(product)}
+              className={`p-4 rounded-2xl flex flex-col items-center justify-center gap-1.5 font-black text-sm sm:text-base border-2 transition-all ${
+                isWishlisted
+                  ? 'bg-rose-50 text-rose-600 border-rose-300'
+                  : 'bg-stone-50 text-stone-800 border-stone-200 hover:bg-stone-100'
+              }`}
+            >
+              <span className="text-2xl">❤️</span>
+              <span>{isWishlisted ? 'पसंद सूची में है' : 'पसंद करें'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSpeakProduct}
+              className={`p-4 rounded-2xl flex flex-col items-center justify-center gap-1.5 font-black text-sm sm:text-base border-2 transition-all ${
+                isSpeaking
+                  ? 'bg-amber-100 text-amber-900 border-amber-300 animate-pulse'
+                  : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+              }`}
+            >
+              <span className="text-2xl">🎤</span>
+              <span>{isSpeaking ? 'रुकें' : 'सुनें (Listen)'}</span>
+            </button>
+          </div>
+
+          <button
+            type="button"
+            disabled={!isAvailable}
+            onClick={handleReserveNow}
+            className="w-full py-5 bg-brand-600 hover:bg-brand-700 disabled:bg-stone-200 disabled:text-stone-400 text-white rounded-2xl text-lg sm:text-xl font-black shadow-lg shadow-brand-600/30 flex items-center justify-center gap-3 transition-transform active:scale-95"
+          >
+            <span className="text-2xl">🛍️</span>
+            <span>दुकान पर रखें (Reserve at Shop)</span>
+          </button>
+
+          <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4 text-center text-sm font-medium text-stone-600">
+            💡 पैसे अभी ऑनलाइन नहीं देने हैं। दुकान पर आकर सामान देखकर Cash या UPI से भुगतान करें।
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <a
+              href={`tel:${shopSettings.phone}`}
+              className="p-3.5 bg-blue-50 border border-blue-200 rounded-2xl text-blue-900 font-bold text-center flex items-center justify-center gap-2 hover:bg-blue-100 transition-colors"
+            >
+              <span className="text-xl">📞</span>
+              <span>दुकान पर फोन करें</span>
+            </a>
+            <a
+              href={`https://wa.me/${shopSettings.whatsappNumber.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`नमस्ते, मुझे "${product.name}" के बारे में पूछना है।`)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-900 font-bold text-center flex items-center justify-center gap-2 hover:bg-emerald-100 transition-colors"
+            >
+              <span className="text-xl">💬</span>
+              <span>WhatsApp पर पूछें</span>
+            </a>
+          </div>
+
+          <div className="border-t border-stone-200 pt-4">
+            <button
+              type="button"
+              onClick={() => setShowSpecs(!showSpecs)}
+              className="w-full py-3 px-4 bg-stone-100 hover:bg-stone-200 rounded-xl font-bold text-stone-800 text-sm flex items-center justify-between transition-colors"
+            >
+              <span>{showSpecs ? '▲ कम जानकारी देखें' : '▼ और जानकारी देखें (More Details)'}</span>
+            </button>
+
+            {showSpecs && (
+              <div className="mt-4 space-y-3 text-sm text-stone-700 p-4 bg-stone-50 rounded-2xl border border-stone-200">
+                <p className="leading-relaxed">{product.description}</p>
+                {product.brand && (
+                  <div><strong className="text-stone-900">ब्रांड:</strong> {product.brand}</div>
+                )}
+                {product.material && (
+                  <div><strong className="text-stone-900">सामग्री:</strong> {product.material}</div>
+                )}
+                {product.dimensions && (
+                  <div><strong className="text-stone-900">नाप (Dimensions):</strong> {product.dimensions}</div>
+                )}
+                <div className="text-xs text-stone-500 pt-2 border-t border-stone-200">
+                  दुकान का पता: {shopSettings.shortAddress}, {shopSettings.city}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-12">
@@ -149,21 +360,31 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
         {/* Left: Gallery */}
         <div className="lg:col-span-6 space-y-4">
           <div className="relative aspect-square w-full rounded-2xl overflow-hidden bg-stone-100 border border-stone-200 shadow-inner group">
-            <ProductImage
-              src={selectedImage}
-              alt={product.name}
-              fill
-              priority
-              sizes="(max-width: 1024px) 100vw, 50vw"
-              categoryName={product.categoryName}
-              className="object-cover object-center transition-transform duration-300 group-hover:scale-105"
-            />
+            {activeMedia === 'video' && product.videoUrl ? (
+              <video
+                src={product.videoUrl}
+                controls
+                muted
+                playsInline
+                className="w-full h-full object-contain bg-black"
+              />
+            ) : (
+              <ProductImage
+                src={selectedImage}
+                alt={product.name}
+                fill
+                priority
+                sizes="(max-width: 1024px) 100vw, 50vw"
+                categoryName={product.categoryName}
+                className="object-cover object-center transition-transform duration-300 group-hover:scale-105"
+              />
+            )}
 
             {/* Badges */}
-            <div className="absolute top-4 left-4 flex flex-col gap-1.5 z-10">
-              {product.discountPercentage > 0 && (
+            <div className="absolute top-4 left-4 flex flex-col gap-1.5 z-10 pointer-events-none">
+              {discountPct > 0 && (
                 <span className="px-3 py-1 rounded-full text-xs font-black bg-brand-600 text-white shadow-md">
-                  SAVE {product.discountPercentage}%
+                  {discountPct}% OFF
                 </span>
               )}
               {product.isBestSeller && (
@@ -204,28 +425,47 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
           </div>
 
           {/* Thumbnail list */}
-          {allImages.length > 1 && (
-            <div className="flex gap-3 overflow-x-auto pb-2">
+          {(allImages.length > 1 || product.videoUrl) && (
+            <div className="flex items-center gap-3 overflow-x-auto pb-2">
               {allImages.map((img, idx) => (
                 <button
                   key={idx}
                   type="button"
-                  onClick={() => setSelectedImage(img)}
+                  onClick={() => {
+                    setSelectedImage(img);
+                    setActiveMedia('image');
+                  }}
                   className={`relative w-18 h-18 sm:w-20 sm:h-20 rounded-xl overflow-hidden shrink-0 border-2 transition-all ${
-                    selectedImage === img
-                      ? 'border-brand-600 shadow-md scale-102'
+                    activeMedia === 'image' && selectedImage === img
+                      ? 'border-brand-600 shadow-md scale-102 ring-2 ring-brand-500/20'
                       : 'border-stone-200 hover:border-stone-400 opacity-70 hover:opacity-100'
                   }`}
                 >
                   <ProductImage
                     src={img}
-                    alt={`${product.name} thumb ${idx}`}
+                    alt={`${product.name} thumb ${idx + 1}`}
                     fill
                     sizes="80px"
                     className="object-cover"
                   />
                 </button>
               ))}
+
+              {product.videoUrl && (
+                <button
+                  type="button"
+                  onClick={() => setActiveMedia('video')}
+                  className={`relative w-18 h-18 sm:w-20 sm:h-20 rounded-xl overflow-hidden shrink-0 border-2 flex flex-col items-center justify-center gap-1 bg-stone-900 text-white transition-all ${
+                    activeMedia === 'video'
+                      ? 'border-brand-600 ring-2 ring-brand-500 shadow-md scale-102'
+                      : 'border-stone-700 opacity-80 hover:opacity-100'
+                  }`}
+                  title="Watch Product Video"
+                >
+                  <Play className="w-5 h-5 text-brand-400 fill-current" />
+                  <span className="text-[10px] font-black tracking-wider">VIDEO</span>
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -260,23 +500,31 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
             )}
 
             {/* Price section */}
-            <div className="p-4 rounded-2xl bg-[#FAF8F5] border border-stone-200/80 space-y-1">
-              <div className="flex items-baseline gap-3">
-                <span className="text-2xl sm:text-3xl font-black text-stone-900">
-                  {formatINR(currentPrice)}
-                </span>
+            <div className="p-4 rounded-2xl bg-[#FAF8F5] border border-stone-200/80 space-y-2">
+              <div className="flex flex-wrap items-baseline gap-4 sm:gap-6">
+                <div>
+                  <span className="text-xs font-bold text-stone-500 block">Special Price:</span>
+                  <span className="text-2xl sm:text-3xl font-black text-stone-900">
+                    {formatINR(currentPrice)}
+                  </span>
+                </div>
                 {product.mrp > currentPrice && (
-                  <span className="text-sm sm:text-base text-stone-400 line-through">
-                    {formatINR(product.mrp)}
-                  </span>
+                  <div>
+                    <span className="text-xs font-medium text-stone-400 block">MRP:</span>
+                    <span className="text-base sm:text-lg text-stone-400 line-through">
+                      {formatINR(product.mrp)}
+                    </span>
+                  </div>
                 )}
-                {product.discountPercentage > 0 && (
-                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                    {product.discountPercentage}% OFF
-                  </span>
+                {discountPct > 0 && (
+                  <div className="self-end pb-1">
+                    <span className="text-xs font-black text-emerald-800 bg-emerald-100 border border-emerald-200 px-3 py-1 rounded-full">
+                      {discountPct}% OFF
+                    </span>
+                  </div>
                 )}
               </div>
-              <p className="text-xs text-stone-500">Inclusive of all local shop taxes.</p>
+              <p className="text-xs text-stone-500">Inclusive of all local shop taxes. Pay at Jainam Traders counter.</p>
             </div>
 
             {/* Availability status (Strictly Rule 10: NO RAW STOCK NUMBERS) */}
@@ -656,7 +904,14 @@ export default function ProductDetailView({ product, reviews, relatedProducts }:
         </div>
       )}
 
-      {isAuthModalOpen && <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />}
+      {isAuthModalOpen && (
+        <AuthModal
+          isOpen={isAuthModalOpen}
+          onClose={() => setIsAuthModalOpen(false)}
+          onSuccess={() => router.push('/checkout')}
+          message={authMessage}
+        />
+      )}
     </div>
   );
 }

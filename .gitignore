@@ -3,34 +3,17 @@
 /.pnp
 .pnp.js
 
-# testing
-/coverage
+# Environment
+.env
+.env.*
+!.env.example
 
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# local env files
-.env*.local
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-
-# android & capacitor local
-local.properties
+# Android credentials & local files
+*.jks
+*.keystore
+keystore.properties
+**/local.properties
+google-services.json
 .gradle/
 android/.gradle/
 android/app/build/
@@ -38,3 +21,26 @@ android/build/
 ios/App/Pods/
 ios/App/build/
 
+# Build output
+dist/
+.next/
+/build/
+/out/
+
+# Test & browser artifacts
+test_output.html
+*.html
+!supabase/templates/*.html
+.playwright-mcp/
+/coverage/
+
+# misc & debug
+.DS_Store
+*.pem
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts

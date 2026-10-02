@@ -4,6 +4,7 @@ import {
   getAdminProducts,
   getCustomerProducts,
 } from '@/lib/db/store-service';
+import { enforceStaffRole } from '@/lib/auth/server-guard';
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,6 +12,11 @@ export async function GET(request: NextRequest) {
     const isAdmin = searchParams.get('admin') === 'true';
 
     if (isAdmin) {
+      const auth = enforceStaffRole(request, ['owner', 'store_manager', 'staff']);
+      if ('errorResponse' in auth) {
+        return auth.errorResponse;
+      }
+
       const status = searchParams.get('status') as 'all' | 'active' | 'archived' | null;
       const search = searchParams.get('q') || undefined;
       const products = await getAdminProducts({
@@ -51,18 +57,23 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    const actorRole = request.headers.get('x-user-role') || 'admin';
-    if (actorRole === 'customer') {
-      return NextResponse.json({ error: 'Unauthorized: Only staff and admin can create products' }, { status: 403 });
-    }
+  // Only Owner and Store Manager can create products
+  const auth = enforceStaffRole(request, ['owner', 'store_manager']);
+  if ('errorResponse' in auth) {
+    return auth.errorResponse;
+  }
 
+  try {
     const body = await request.json();
-    const actorId = request.headers.get('x-user-id') || 'admin-session';
+    const actorId = auth.session.staffId;
     const product = await createAdminProduct(body, actorId);
     return NextResponse.json({ success: true, product }, { status: 201 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to create product';
-    return NextResponse.json({ error: message }, { status: 400 });
+    const isDuplicate = message.includes('Duplicate') || message.includes('DUPLICATE') || message.includes('already exists');
+    return NextResponse.json(
+      { error: message, isDuplicate },
+      { status: isDuplicate ? 409 : 400 }
+    );
   }
 }

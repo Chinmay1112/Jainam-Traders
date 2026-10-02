@@ -159,31 +159,27 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const applyCoupon = async (code: string): Promise<{ success: boolean; message: string }> => {
     const clean = code.toUpperCase().trim();
-    if (clean === 'FIRST10') {
-      if (subtotal < 499) {
-        return { success: false, message: 'Minimum order amount for FIRST10 is ₹499' };
-      }
-      setCouponCode('FIRST10');
-      return { success: true, message: 'Welcome Coupon FIRST10 applied! (10% Off)' };
+    if (!clean) {
+      return { success: false, message: 'Please enter a coupon code' };
     }
 
-    if (clean === 'JAINAM100') {
-      if (subtotal < 999) {
-        return { success: false, message: 'Minimum order amount for JAINAM100 is ₹999' };
+    try {
+      const res = await fetch('/api/coupons/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: clean, subtotal }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.valid) {
+        return { success: false, message: data.message || 'Invalid or expired coupon code' };
       }
-      setCouponCode('JAINAM100');
-      return { success: true, message: 'Flat ₹100 Off coupon applied successfully!' };
-    }
 
-    if (clean === 'FESTIVE15') {
-      if (subtotal < 1499) {
-        return { success: false, message: 'Minimum order amount for FESTIVE15 is ₹1499' };
-      }
-      setCouponCode('FESTIVE15');
-      return { success: true, message: 'Festive Celebration 15% discount applied!' };
+      setCouponCode(clean);
+      setCouponDiscount(data.discountAmount || 0);
+      return { success: true, message: data.message || `Coupon ${clean} applied successfully!` };
+    } catch {
+      return { success: false, message: 'Unable to validate coupon code at this time' };
     }
-
-    return { success: false, message: 'Invalid or expired coupon code' };
   };
 
   const removeCoupon = () => {

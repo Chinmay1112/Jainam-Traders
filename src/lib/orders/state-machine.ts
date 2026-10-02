@@ -8,22 +8,22 @@ export interface TransitionRule {
 
 export const ORDER_TRANSITIONS: Record<OrderStatus, TransitionRule> = {
   PENDING: {
-    allowedTo: ['CONFIRMED', 'CANCELLED'],
-    allowedRoles: ['owner', 'admin', 'store_manager', 'customer'],
+    allowedTo: ['CONFIRMED', 'CANCELLED', 'EXPIRED'],
+    allowedRoles: ['owner', 'admin', 'store_manager', 'staff', 'customer'],
     description: 'Order placed by customer, awaiting store confirmation.',
   },
   CONFIRMED: {
-    allowedTo: ['PREPARING', 'CANCELLED'],
-    allowedRoles: ['owner', 'admin', 'store_manager'],
+    allowedTo: ['PREPARING', 'CANCELLED', 'EXPIRED'],
+    allowedRoles: ['owner', 'admin', 'store_manager', 'staff'],
     description: 'Store confirmed order. Staff begins packing and preparing items.',
   },
   PREPARING: {
-    allowedTo: ['READY_FOR_PICKUP', 'CANCELLED'],
+    allowedTo: ['READY_FOR_PICKUP', 'CANCELLED', 'EXPIRED'],
     allowedRoles: ['owner', 'admin', 'store_manager', 'staff'],
     description: 'Items are packaged and labeled at the pickup counter.',
   },
   READY_FOR_PICKUP: {
-    allowedTo: ['PICKED_UP', 'CANCELLED'],
+    allowedTo: ['PICKED_UP', 'CANCELLED', 'EXPIRED'],
     allowedRoles: ['owner', 'admin', 'store_manager', 'staff'],
     description: 'Customer notified to collect order from shop. Ready at counter.',
   },
@@ -36,6 +36,11 @@ export const ORDER_TRANSITIONS: Record<OrderStatus, TransitionRule> = {
     allowedTo: [],
     allowedRoles: [],
     description: 'Order cancelled and reserved inventory released back to shelf.',
+  },
+  EXPIRED: {
+    allowedTo: [],
+    allowedRoles: [],
+    description: 'Order reservation expired because pickup deadline elapsed. Reserved inventory released back to shelf.',
   },
   RETURN_REQUESTED: {
     allowedTo: ['RETURN_APPROVED', 'RETURN_REJECTED'],

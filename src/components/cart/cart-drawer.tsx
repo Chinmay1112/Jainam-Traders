@@ -6,10 +6,12 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { X, Plus, Minus, Trash2, ShoppingBag, ArrowRight, Tag, Check, Sparkles } from 'lucide-react';
 import { useCart } from '@/lib/context/cart-context';
+import { useShop } from '@/lib/context/shop-context';
 import { formatINR } from '@/lib/utils';
 
 export default function CartDrawer() {
   const router = useRouter();
+  const shop = useShop();
   const {
     items,
     itemCount,
@@ -249,7 +251,7 @@ export default function CartDrawer() {
               <div className="flex items-start gap-2 p-2.5 rounded-xl bg-amber-50/80 border border-amber-200/80 text-[11px] text-amber-900 leading-tight">
                 <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <span>
-                  No online payment is collected. Items will be held at our Main Bazar counter for your inspection.
+                  No online payment is collected. Items will be held at our {shop.shortAddress} counter for your inspection.
                 </span>
               </div>
 

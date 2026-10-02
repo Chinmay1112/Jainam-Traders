@@ -13,7 +13,8 @@ import {
   AlertCircle,
   Search,
 } from 'lucide-react';
-import { parseSearchQuery } from '@/lib/db/store-service';
+import { parseSearchQuery } from '@/lib/search/search-engine';
+import { useShop } from '@/lib/context/shop-context';
 
 interface VoiceSearchModalProps {
   isOpen: boolean;
@@ -22,6 +23,7 @@ interface VoiceSearchModalProps {
 
 export default function VoiceSearchModal({ isOpen, onClose }: VoiceSearchModalProps) {
   const router = useRouter();
+  const { shop } = useShop();
   const [lang, setLang] = useState<'hi-IN' | 'en-IN'>('hi-IN');
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -68,20 +70,23 @@ export default function VoiceSearchModal({ isOpen, onClose }: VoiceSearchModalPr
       if (!clean) return;
 
       const parsed = parseSearchQuery(clean);
+      const queryText = parsed.cleanedText || clean;
       const spokenAck =
         lang === 'hi-IN'
-          ? `दुकान में खोज रहे हैं: ${parsed.cleanedText || clean}`
-          : `Searching store catalogue for: ${parsed.cleanedText || clean}`;
+          ? `दुकान में खोज रहे हैं: ${queryText}`
+          : `Searching store catalogue for: ${queryText}`;
       speakConfirmation(spokenAck);
 
       onClose();
+      const params = new URLSearchParams();
+      params.set('q', queryText);
       if (parsed.inferredMaxPrice) {
-        router.push(
-          `/search?q=${encodeURIComponent(parsed.cleanedText || clean)}&maxPrice=${parsed.inferredMaxPrice}`
-        );
-      } else {
-        router.push(`/search?q=${encodeURIComponent(parsed.cleanedText || clean)}`);
+        params.set('maxPrice', String(parsed.inferredMaxPrice));
       }
+      if (parsed.inferredMinPrice) {
+        params.set('minPrice', String(parsed.inferredMinPrice));
+      }
+      router.push(`/search?${params.toString()}`);
     },
     [lang, onClose, router, speakConfirmation, stopListening]
   );
@@ -300,22 +305,28 @@ export default function VoiceSearchModal({ isOpen, onClose }: VoiceSearchModalPr
         </div>
 
         {/* Direct Human Help Links */}
-        <div className="w-full mt-4 pt-3 border-t border-stone-100 flex items-center justify-around text-xs font-bold text-stone-600">
-          <a
-            href="tel:+919876543210"
-            className="flex items-center gap-1.5 hover:text-brand-600 p-2 rounded-lg"
-          >
-            <Phone className="w-4 h-4 text-emerald-600" /> दुकान पर कॉल करें (Call Shop)
-          </a>
-          <a
-            href="https://wa.me/919876543210?text=Namaste%2C%20I%20need%20help%20with%20a%20product"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 hover:text-brand-600 p-2 rounded-lg"
-          >
-            <MessageCircle className="w-4 h-4 text-emerald-600" /> WhatsApp
-          </a>
-        </div>
+        {(shop.phone || shop.whatsappNumber) && (
+          <div className="w-full mt-4 pt-3 border-t border-stone-100 flex items-center justify-around text-xs font-bold text-stone-600">
+            {shop.phone ? (
+              <a
+                href={`tel:${shop.phone.replace(/\s+/g, '')}`}
+                className="flex items-center gap-1.5 hover:text-brand-600 p-2 rounded-lg"
+              >
+                <Phone className="w-4 h-4 text-emerald-600" /> दुकान पर कॉल करें (Call Shop)
+              </a>
+            ) : null}
+            {shop.whatsappNumber ? (
+              <a
+                href={`https://wa.me/${shop.whatsappNumber.replace(/\D/g, '')}?text=Namaste%2C%20I%20need%20help%20with%20a%20product`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 hover:text-brand-600 p-2 rounded-lg"
+              >
+                <MessageCircle className="w-4 h-4 text-emerald-600" /> WhatsApp
+              </a>
+            ) : null}
+          </div>
+        )}
       </div>
     </div>
   );

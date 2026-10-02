@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { MessageSquare, X, Send, Bot, User, Phone, Sparkles, AlertCircle } from 'lucide-react';
+import { useShop } from '@/lib/context/shop-context';
 
 interface ChatMessage {
   id: string;
@@ -11,6 +12,7 @@ interface ChatMessage {
 }
 
 export default function AiSupportModal() {
+  const { shop } = useShop();
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -71,7 +73,7 @@ export default function AiSupportModal() {
         {
           id: `ai-${Date.now()}`,
           sender: 'ai',
-          text: 'Our AI assistant is temporarily unavailable. Please call us at +91 98765 43210 or chat with us on WhatsApp.',
+          text: `Our AI assistant is temporarily unavailable.${shop.phone ? ` Please call us at ${shop.phone} or chat with us on WhatsApp.` : ' Please visit our store counter or try again shortly.'}`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
@@ -197,21 +199,28 @@ export default function AiSupportModal() {
                 <div className="flex items-center gap-1.5 font-bold">
                   <AlertCircle className="w-4 h-4 text-amber-600" /> Need human store assistance?
                 </div>
-                <div className="flex gap-2">
-                  <a
-                    href="https://wa.me/919876543210"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex-1 py-1.5 text-center bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold"
-                  >
-                    WhatsApp Shop
-                  </a>
-                  <a
-                    href="tel:+919876543210"
-                    className="flex-1 py-1.5 text-center bg-stone-800 hover:bg-stone-900 text-white rounded-lg font-bold"
-                  >
-                    Call Store
-                  </a>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  {shop.whatsappNumber ? (
+                    <a
+                      href={`https://wa.me/${shop.whatsappNumber.replace(/\D/g, '')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 py-1.5 text-center bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold"
+                    >
+                      WhatsApp Shop
+                    </a>
+                  ) : null}
+                  {shop.phone ? (
+                    <a
+                      href={`tel:${shop.phone.replace(/\s+/g, '')}`}
+                      className="flex-1 py-1.5 text-center bg-stone-800 hover:bg-stone-900 text-white rounded-lg font-bold"
+                    >
+                      Call Store
+                    </a>
+                  ) : null}
+                  {!shop.phone && !shop.whatsappNumber ? (
+                    <p className="text-[11px] text-amber-800">Please visit our store counter during opening hours for direct staff assistance.</p>
+                  ) : null}
                 </div>
               </div>
             )}

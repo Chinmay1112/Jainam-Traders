@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 import { useCart } from '@/lib/context/cart-context';
 import { useAuth } from '@/lib/context/auth-context';
+import { useShop } from '@/lib/context/shop-context';
+import { useSimpleMode } from '@/lib/context/simple-mode-context';
 import { formatINR } from '@/lib/utils';
 import AuthModal from '@/components/auth/auth-modal';
 import { triggerHaptic, getCurrentNetworkStatus } from '@/lib/native/capacitor-bridge';
@@ -29,6 +31,8 @@ export default function CheckoutPage() {
   const router = useRouter();
   const { items, subtotal, totalMrp, mrpSavings, couponCode, couponDiscount, finalTotal, clearCart } = useCart();
   const { user } = useAuth();
+  const shop = useShop();
+  const { isSimpleMode } = useSimpleMode();
 
   // Customer input form
   const [customerName, setCustomerName] = useState(user?.fullName || '');
@@ -48,6 +52,55 @@ export default function CheckoutPage() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMessage, setAuthModalMessage] = useState('Please sign in to reserve this item.');
+
+  // Gift Code state (Part 25 & 27)
+  const [giftCodeInput, setGiftCodeInput] = useState('');
+  const [appliedGiftCode, setAppliedGiftCode] = useState('');
+  const [giftDiscount, setGiftDiscount] = useState(0);
+  const [giftError, setGiftError] = useState('');
+  const [giftSuccess, setGiftSuccess] = useState('');
+  const [giftLoading, setGiftLoading] = useState(false);
+
+  const handleApplyGiftCode = async () => {
+    if (!giftCodeInput.trim()) return;
+    setGiftLoading(true);
+    setGiftError('');
+    setGiftSuccess('');
+
+    try {
+      const res = await fetch('/api/gift-codes/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: giftCodeInput.trim(),
+          subtotal: finalTotal,
+          customerId: user?.id,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.valid) {
+        setGiftError(data.message || 'Invalid or expired gift code.');
+        return;
+      }
+
+      setAppliedGiftCode(giftCodeInput.trim().toUpperCase());
+      setGiftDiscount(data.discountAmount || 0);
+      setGiftSuccess(data.message || `Gift code ${data.code} applied!`);
+      setGiftCodeInput('');
+    } catch {
+      setGiftError('Unable to apply gift code at this time.');
+    } finally {
+      setGiftLoading(false);
+    }
+  };
+
+  const handleRemoveGiftCode = () => {
+    setAppliedGiftCode('');
+    setGiftDiscount(0);
+    setGiftSuccess('');
+    setGiftError('');
+  };
 
   // Sync user state if updated
   React.useEffect(() => {
@@ -80,9 +133,11 @@ export default function CheckoutPage() {
 
   const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading) return; // Prevent duplicate submission on mobile double-tap
     setErrorMessage('');
 
     if (!user) {
+      setAuthModalMessage('Please sign in to reserve this item.');
       setIsAuthModalOpen(true);
       return;
     }
@@ -107,8 +162,10 @@ export default function CheckoutPage() {
     setLoading(true);
 
     try {
+      const idempotencyKey = `ord-req-${user.id}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       const orderPayload = {
         customerId: user.id,
+        idempotencyKey,
         customerName: customerName.trim(),
         customerPhone: cleanPhone,
         customerEmail: customerEmail.trim() || undefined,
@@ -118,6 +175,7 @@ export default function CheckoutPage() {
           quantity: i.quantity,
         })),
         couponCode: couponCode || undefined,
+        giftCode: appliedGiftCode || undefined,
         pickupMode,
         pickupSlotDate: pickupMode === 'SLOT' ? pickupSlotDate : undefined,
         pickupSlotTime: pickupMode === 'SLOT' ? pickupSlotTime : undefined,
@@ -181,13 +239,32 @@ export default function CheckoutPage() {
               {!user && (
                 <button
                   type="button"
-                  onClick={() => setIsAuthModalOpen(true)}
+                  onClick={() => {
+                    setAuthModalMessage('Please sign in to reserve this item.');
+                    setIsAuthModalOpen(true);
+                  }}
                   className="text-xs font-bold text-brand-600 hover:text-brand-700 underline"
                 >
-                  Sign in with Phone
+                  Sign in to Reserve
                 </button>
               )}
             </div>
+
+            {!user && (
+              <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center justify-between gap-3">
+                <span>Please sign in to reserve this item.</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthModalMessage('Please sign in to reserve this item.');
+                    setIsAuthModalOpen(true);
+                  }}
+                  className="px-3 py-1 bg-brand-600 hover:bg-brand-700 text-white rounded-lg font-bold text-xs shrink-0"
+                >
+                  Sign In
+                </button>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -209,7 +286,7 @@ export default function CheckoutPage() {
 
               <div>
                 <label className="block text-xs font-bold text-stone-700 uppercase mb-1">
-                  Mobile Number <span className="text-rose-500">*</span>
+                  Mobile Number (Order Updates) <span className="text-rose-500">*</span>
                 </label>
                 <div className="relative">
                   <span className="absolute left-3 top-2.5 text-xs font-bold text-stone-500">+91</span>
@@ -217,12 +294,15 @@ export default function CheckoutPage() {
                     type="tel"
                     required
                     maxLength={10}
-                    placeholder="98765 43210"
+                    placeholder="90000 00000"
                     value={customerPhone}
                     onChange={(e) => setCustomerPhone(e.target.value.replace(/\D/g, ''))}
                     className="w-full pl-12 pr-3 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500"
                   />
                 </div>
+                <p className="text-[10px] text-stone-500 mt-1">
+                  Used for store pickup readiness notifications. No SMS OTP required.
+                </p>
               </div>
 
               <div className="sm:col-span-2">
@@ -352,10 +432,15 @@ export default function CheckoutPage() {
               <span>COLLECTION COUNTER</span>
             </div>
             <p className="text-xs text-stone-300 leading-relaxed">
-              Jainam Traders • Shop No. 4 & 5, Mahaveer Market, Main Bazar Road, Near Clock Tower.
+              {shop.shopName} • {shop.shopAddress}
               <br />
-              Store Hours: 09:30 AM to 09:30 PM (Closed on Sundays).
+              Store Hours: {shop.openingTime} AM to {shop.closingTime} PM ({shop.closedDaysFormatted}).
             </p>
+            {isSimpleMode && (
+              <div className="mt-2 p-2.5 bg-amber-500/20 border border-amber-500/40 rounded-xl text-amber-200 text-xs font-bold">
+                पैसे अभी नहीं देने हैं! दुकान पर सामान देखकर Cash या UPI से भुगतान करें।
+              </div>
+            )}
           </div>
         </div>
 
@@ -384,6 +469,58 @@ export default function CheckoutPage() {
               ))}
             </div>
 
+            {/* Gift Code Input (Part 25 & 27) */}
+            <div className="pt-3 border-t border-stone-100">
+              <label className="block text-xs font-bold text-stone-700 uppercase mb-1.5">
+                Gift Code / Store Voucher
+              </label>
+              {appliedGiftCode ? (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
+                  <div>
+                    <span className="text-xs font-bold text-emerald-800">
+                      Applied: {appliedGiftCode}
+                    </span>
+                    <p className="text-[10px] text-emerald-600">
+                      - {formatINR(giftDiscount)} deducted from counter payment
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRemoveGiftCode}
+                    className="text-xs font-bold text-rose-600 hover:text-rose-800 underline"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="e.g. JAINAM500"
+                      value={giftCodeInput}
+                      onChange={(e) => setGiftCodeInput(e.target.value.toUpperCase())}
+                      className="flex-1 px-3 py-2 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 uppercase tracking-wider focus:outline-none focus:ring-1 focus:ring-brand-500"
+                    />
+                    <button
+                      type="button"
+                      disabled={giftLoading || !giftCodeInput.trim()}
+                      onClick={handleApplyGiftCode}
+                      className="px-4 py-2 bg-stone-900 hover:bg-stone-800 disabled:bg-stone-300 text-white rounded-xl text-xs font-bold transition-colors"
+                    >
+                      {giftLoading ? 'Applying...' : 'Apply'}
+                    </button>
+                  </div>
+                  {giftError && (
+                    <p className="text-[10px] text-rose-600 font-semibold">{giftError}</p>
+                  )}
+                  {giftSuccess && (
+                    <p className="text-[10px] text-emerald-600 font-semibold">{giftSuccess}</p>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Price Calculations */}
             <div className="pt-3 border-t border-stone-100 space-y-1.5 text-xs text-stone-600">
               <div className="flex justify-between">
@@ -406,9 +543,17 @@ export default function CheckoutPage() {
                   <span>- {formatINR(couponDiscount)}</span>
                 </div>
               )}
+              {giftDiscount > 0 && (
+                <div className="flex justify-between text-emerald-700 font-bold">
+                  <span>Gift Code ({appliedGiftCode})</span>
+                  <span>- {formatINR(giftDiscount)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-base font-black text-stone-900 pt-2 border-t border-stone-200">
                 <span>Pay at Counter</span>
-                <span className="text-brand-700">{formatINR(finalTotal)}</span>
+                <span className="text-brand-700">
+                  {formatINR(Math.max(0, finalTotal - giftDiscount))}
+                </span>
               </div>
             </div>
 
@@ -446,7 +591,7 @@ export default function CheckoutPage() {
         <AuthModal
           isOpen={isAuthModalOpen}
           onClose={() => setIsAuthModalOpen(false)}
-          message="Please sign in with your name and mobile number to complete your pickup reservation."
+          message={authModalMessage}
         />
       )}
     </div>

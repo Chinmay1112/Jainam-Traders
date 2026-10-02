@@ -24,23 +24,45 @@ import {
   SupportConversation,
   SupportMessage,
   UserRole,
+  GiftCode,
+  GiftCodeRedemption,
+  CustomerStaffNote,
+  CustomerActivityEvent,
 } from '@/lib/types';
 import { INITIAL_CATEGORIES, INITIAL_COUPONS, INITIAL_OFFERS, INITIAL_PRODUCTS, INITIAL_SHOP_SETTINGS } from './initial-data';
 import { canTransitionOrder } from '@/lib/orders/state-machine';
-import { calculateOrderPricing, RawCheckoutItem, ValidatedItem } from '@/lib/pricing/engine';
+import {
+  calculateOrderPricing,
+  calculateDiscountPercentage,
+  validateProductPricing,
+  RawCheckoutItem,
+  ValidatedItem,
+} from '@/lib/pricing/engine';
+import { calculateOrderDiscounts } from '@/lib/pricing/discount-engine';
+import { customerStore } from '@/lib/auth/customer-store';
 import {
   normalizeStockNumber,
   normalizeProductInventory,
   calculateStockAdjustment,
 } from '@/lib/inventory/normalizer';
+import { searchCatalogue } from '@/lib/search/search-engine';
+import { extractSearchIntent } from '@/lib/search/normalizer';
+import { buildProductSearchIndex } from '@/lib/search/product-indexer';
+import {
+  generateUniqueProductSku,
+  checkBarcodeUniqueness,
+  normalizeBarcodeValue,
+} from '@/lib/barcode/barcode-service';
+import { hashGiftCode, normalizeGiftCode } from '@/lib/gift-codes/gift-code-service';
+import { findSimilarProducts } from '@/lib/products/duplicate-detector';
 
 // Global in-memory storage for high-concurrency local development & automated test execution
 class StoreDataStore {
   public settings: ShopSettings = { ...INITIAL_SHOP_SETTINGS };
   public categories: Category[] = [...INITIAL_CATEGORIES];
-  public products: Product[] = JSON.parse(JSON.stringify(INITIAL_PRODUCTS));
-  public coupons: Coupon[] = JSON.parse(JSON.stringify(INITIAL_COUPONS));
-  public offers: Offer[] = JSON.parse(JSON.stringify(INITIAL_OFFERS));
+  public products: Product[] = [];
+  public coupons: Coupon[] = [];
+  public offers: Offer[] = [];
   public orders: Order[] = [];
   public returnRequests: ReturnRequest[] = [];
   public refundRecords: RefundRecord[] = [];
@@ -49,50 +71,35 @@ class StoreDataStore {
   public supportConversations: SupportConversation[] = [];
   public inventoryMovements: InventoryMovement[] = [];
   public auditLogs: AuditLog[] = [];
+  public giftCodes: GiftCode[] = [];
+  public giftCodeRedemptions: GiftCodeRedemption[] = [];
+  public customerNotes: CustomerStaffNote[] = [];
+  public customerActivity: CustomerActivityEvent[] = [];
   private orderCounter: number = 100;
 
   // Concurrency mutex lock to prevent race conditions during inventory reservation
   private reservationLock: Promise<void> = Promise.resolve();
 
   constructor() {
-    this.seedInitialReviews();
+    // Production store starts completely clean with ZERO demo records.
+    // Real products, orders, and reviews are added by actual store operations.
   }
 
-  private seedInitialReviews() {
-    this.reviews = [
-      {
-        id: 'rev-001',
-        productId: 'c0000000-0000-0000-0000-000000000001',
-        productName: 'Handcrafted Rosewood 8x10 Photo Frame',
-        customerId: 'cust-demo-1',
-        customerName: 'Rajesh K. Mehta',
-        orderId: 'JT-2026-000095',
-        rating: 5,
-        title: 'Outstanding quality Sheesham wood!',
-        comment:
-          'Picked up from the Main Bazar shop. The wood carving and glass finish are top-notch. Much better than online pictures!',
-        isVerifiedPurchase: true,
-        status: 'approved',
-        createdAt: new Date(Date.now() - 3 * 86400000).toISOString(),
-        updatedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
-      },
-      {
-        id: 'rev-002',
-        productId: 'c0000000-0000-0000-0000-000000000004',
-        productName: 'Silent Sweep 12-inch Wooden Wall Clock',
-        customerId: 'cust-demo-2',
-        customerName: 'Priya Sharma',
-        orderId: 'JT-2026-000096',
-        rating: 5,
-        title: 'Truly noiseless and beautiful dial',
-        comment:
-          'Completely silent sweep, perfect for bedroom. Store staff tested the quartz battery right before giving it to me at the counter.',
-        isVerifiedPurchase: true,
-        status: 'approved',
-        createdAt: new Date(Date.now() - 5 * 86400000).toISOString(),
-        updatedAt: new Date(Date.now() - 5 * 86400000).toISOString(),
-      },
-    ];
+  /**
+   * Test fixture loader — isolated strictly for automated test suites (vitest)
+   */
+  public seedTestFixtures(fixtures: {
+    products?: Product[];
+    orders?: Order[];
+    reviews?: Review[];
+    coupons?: Coupon[];
+    offers?: Offer[];
+  }) {
+    if (fixtures.products) this.products = JSON.parse(JSON.stringify(fixtures.products));
+    if (fixtures.orders) this.orders = JSON.parse(JSON.stringify(fixtures.orders));
+    if (fixtures.reviews) this.reviews = JSON.parse(JSON.stringify(fixtures.reviews));
+    if (fixtures.coupons) this.coupons = JSON.parse(JSON.stringify(fixtures.coupons));
+    if (fixtures.offers) this.offers = JSON.parse(JSON.stringify(fixtures.offers));
   }
 
   // Generate readable unique order numbers: JT-2026-000101
@@ -140,6 +147,21 @@ class StoreDataStore {
 const globalForStore = globalThis as unknown as { storeDb: StoreDataStore };
 export const storeDb = globalForStore.storeDb || new StoreDataStore();
 if (process.env.NODE_ENV !== 'production') globalForStore.storeDb = storeDb;
+
+/**
+ * Isolated fixture seeder for automated test suites
+ */
+export function seedTestFixtures(fixtures?: {
+  products?: Product[];
+  orders?: Order[];
+  reviews?: Review[];
+  coupons?: Coupon[];
+  offers?: Offer[];
+}) {
+  if (fixtures) {
+    storeDb.seedTestFixtures(fixtures);
+  }
+}
 
 // ==============================================================================
 // PUBLIC SERVICE API METHODS
@@ -216,184 +238,46 @@ export function toCustomerProductView(product: Product): CustomerProductView {
   };
 }
 
-export interface ParsedSearchQuery {
-  cleanedText: string;
-  tokens: string[];
-  inferredMaxPrice?: number;
-}
-
-export function parseSearchQuery(rawQuery: string): ParsedSearchQuery {
-  if (!rawQuery || !rawQuery.trim()) {
-    return { cleanedText: '', tokens: [] };
-  }
-
-  let text = rawQuery.toLowerCase().trim();
-
-  // 1. Detect natural budget/price phrases: e.g. "500 ke andar", "under 500", "500 tak", "less than 500"
-  let inferredMaxPrice: number | undefined;
-  const underPriceMatch =
-    text.match(/(?:under|below|less than|ke andar|ke neeche|tak|mein|me)\s*(?:rs\.?|rupees|rupaye|₹)?\s*(\d+)/i) ||
-    text.match(/(\d+)\s*(?:rs\.?|rupees|rupaye|₹)?\s*(?:ke andar|ke neeche|under|tak|mein|me)/i);
-  if (underPriceMatch && underPriceMatch[1]) {
-    const num = parseInt(underPriceMatch[1], 10);
-    if (!isNaN(num) && num > 0) {
-      inferredMaxPrice = num;
-      text = text.replace(underPriceMatch[0], ' ');
-    }
-  }
-
-  // 2. Remove conversational stop words in Hindi and English
-  const stopWords = new Set([
-    'dikhao',
-    'dikhaye',
-    'dikhado',
-    'chahiye',
-    'hai',
-    'kuch',
-    'batao',
-    'lao',
-    'ke',
-    'ki',
-    'ka',
-    'ko',
-    'se',
-    'liye',
-    'wala',
-    'wali',
-    'wale',
-    'show',
-    'me',
-    'please',
-    'give',
-    'find',
-    'looking',
-    'for',
-    'want',
-    'need',
-    'items',
-    'item',
-    'products',
-    'product',
-    'rupaye',
-    'rupees',
-    'rs',
-  ]);
-
-  const rawTokens = text
-    .replace(/[^a-z0-9\s]/gi, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
-  const filteredTokens = rawTokens.filter((t) => !stopWords.has(t) && t.length > 1);
-
-  const tokens = filteredTokens.length > 0 ? filteredTokens : rawTokens;
-  const cleanedText = tokens.join(' ');
-
-  return { cleanedText, tokens, inferredMaxPrice };
-}
+export { parseSearchQuery, type ParsedSearchQuery } from '@/lib/search/search-engine';
 
 export async function getCustomerProducts(params: ProductFilterParams = {}): Promise<{
   products: CustomerProductView[];
   total: number;
+  suggestedAlternatives?: { label: string; query: string; categorySlug: string }[];
 }> {
-  let list = storeDb.products.filter((p) => p.isActive && !p.isArchived && p.status !== 'archived');
+  const result = searchCatalogue(storeDb.products, {
+    query: params.query,
+    categorySlug: params.categorySlug,
+    minPrice: params.minPrice,
+    maxPrice: params.maxPrice,
+    featured: params.featured,
+    newArrival: params.newArrival,
+    bestSeller: params.bestSeller,
+    sort: params.sort,
+    limit: params.limit,
+  });
 
-  // Category filter
-  if (params.categorySlug) {
-    const category = storeDb.categories.find((c) => c.slug === params.categorySlug);
-    if (category) {
-      list = list.filter((p) => p.categoryId === category.id);
-    }
-  }
-
-  let effectiveMaxPrice = params.maxPrice;
-
-  // Search query with natural phrasing & multi-token matching
-  if (params.query && params.query.trim()) {
-    const parsed = parseSearchQuery(params.query);
-    if (parsed.inferredMaxPrice !== undefined && effectiveMaxPrice === undefined) {
-      effectiveMaxPrice = parsed.inferredMaxPrice;
-    }
-
-    const rawCompact = params.query.toLowerCase().trim().replace(/[\s-_]+/g, '');
-    const tokens = parsed.tokens;
-
-    list = list.filter((p) => {
-      // 1. Direct compact match for SKU or names
-      const pNameCompact = p.name.toLowerCase().replace(/[\s-_]+/g, '');
-      if (pNameCompact.includes(rawCompact)) return true;
-      if (p.sku.toLowerCase().includes(rawCompact)) return true;
-
-      // 2. Tokenized match: search across name, brand, category, tags, occasion, material, description
-      if (tokens.length > 0) {
-        const searchableCorpus = `${p.name} ${p.brand} ${p.categoryName} ${p.tags.join(' ')} ${p.occasion || ''} ${p.material || ''} ${p.shortDescription || ''}`.toLowerCase();
-        
-        // If all tokens match
-        const allMatch = tokens.every((tok) => {
-          if (tok === 'ladke' || tok === 'boy' || tok === 'boys') {
-            return searchableCorpus.includes('men') || searchableCorpus.includes('boy') || searchableCorpus.includes('watch') || searchableCorpus.includes('belt') || searchableCorpus.includes('gift');
-          }
-          return searchableCorpus.includes(tok);
-        });
-        if (allMatch) return true;
-
-        // If multiple tokens, at least majority match
-        if (tokens.length >= 2) {
-          const matchedCount = tokens.filter((tok) => searchableCorpus.includes(tok)).length;
-          if (matchedCount >= Math.ceil(tokens.length * 0.6)) return true;
-        }
-      }
-
-      return false;
-    });
-  }
-
-  // Price range
-  if (params.minPrice !== undefined) {
-    list = list.filter((p) => p.price >= params.minPrice!);
-  }
-  if (effectiveMaxPrice !== undefined) {
-    list = list.filter((p) => p.price <= effectiveMaxPrice!);
-  }
-
-  // Badges
-  if (params.featured) list = list.filter((p) => p.isFeatured);
-  if (params.newArrival) list = list.filter((p) => p.isNewArrival);
-  if (params.bestSeller) list = list.filter((p) => p.isBestSeller);
-
-  // Sorting
-  if (params.sort) {
-    switch (params.sort) {
-      case 'price_asc':
-        list.sort((a, b) => a.price - b.price);
-        break;
-      case 'price_desc':
-        list.sort((a, b) => b.price - a.price);
-        break;
-      case 'rating':
-        list.sort((a, b) => (b.averageRating || 0) - (a.averageRating || 0));
-        break;
-      case 'newest':
-        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        break;
-      default:
-        break;
-    }
-  }
-
-  const total = list.length;
   const offset = params.offset || 0;
   const limit = params.limit || 50;
-  const paginated = list.slice(offset, offset + limit);
+  const paginated = params.limit ? result.products : result.products.slice(offset, offset + limit);
 
   return {
     products: paginated.map(toCustomerProductView),
-    total,
+    total: result.total,
+    suggestedAlternatives: result.suggestedAlternatives,
   };
 }
 
+
 export async function getProductBySlug(slug: string): Promise<CustomerProductView | null> {
   const p = storeDb.products.find(
-    (prod) => prod.slug === slug && prod.isActive && !prod.isArchived && prod.status !== 'archived'
+    (prod) =>
+      prod.slug === slug &&
+      prod.isActive &&
+      !prod.isArchived &&
+      prod.status !== 'archived' &&
+      prod.status !== 'draft' &&
+      prod.status !== 'hidden'
   );
   if (!p) return null;
   return toCustomerProductView(p);
@@ -401,6 +285,18 @@ export async function getProductBySlug(slug: string): Promise<CustomerProductVie
 
 export async function getRawProductById(id: string): Promise<Product | null> {
   return storeDb.products.find((prod) => prod.id === id) || null;
+}
+
+export async function getProductByBarcode(code: string): Promise<Product | null> {
+  const norm = normalizeBarcodeValue(code);
+  if (!norm) return null;
+  return (
+    storeDb.products.find(
+      (prod) =>
+        normalizeBarcodeValue(prod.sku) === norm ||
+        (prod.barcodeValue && normalizeBarcodeValue(prod.barcodeValue) === norm)
+    ) || null
+  );
 }
 
 /**
@@ -443,36 +339,104 @@ export async function getAdminProducts(filter?: {
 }
 
 export async function createAdminProduct(
-  data: Omit<Product, 'id' | 'createdAt' | 'updatedAt' | 'discountPercentage' | 'reservedStock'> & {
-    reservedStock?: number;
+  data: Partial<Product> & {
+    name: string;
+    price: number;
+    mrp: number;
+    confirmDifferentiator?: { reason: string; note?: string };
+    bypassDuplicateReason?: string;
   },
   actorId?: string
 ): Promise<Product> {
   if (!data.name || !data.name.trim()) throw new Error('Product name is required');
-  if (!data.sku || !data.sku.trim()) throw new Error('Product SKU is required');
-  if (data.price <= 0) throw new Error('Selling price must be greater than zero');
-  if (data.mrp < data.price) throw new Error('Selling price cannot exceed MRP');
 
-  const discountPct = data.mrp > 0 ? Math.round(((data.mrp - data.price) / data.mrp) * 100) : 0;
+  // If SKU is missing or empty, generate a unique Jainam Traders SKU automatically
+  const rawSku = data.sku && data.sku.trim()
+    ? data.sku.trim()
+    : generateUniqueProductSku(storeDb.products, data.categoryName);
+  const normalizedSku = normalizeBarcodeValue(rawSku);
+
+  // Barcode / SKU collision protection
+  const skuCheck = checkBarcodeUniqueness(storeDb.products, normalizedSku);
+  if (!skuCheck.isUnique) {
+    throw new Error(`Duplicate SKU rejected: SKU "${normalizedSku}" already exists for product "${skuCheck.conflictProduct?.name}".`);
+  }
+
+  const rawBarcode = data.barcodeValue ? normalizeBarcodeValue(data.barcodeValue) : normalizedSku;
+  const barcodeCheck = checkBarcodeUniqueness(storeDb.products, rawBarcode);
+  if (!barcodeCheck.isUnique) {
+    throw new Error(`Duplicate barcode rejected: Barcode "${rawBarcode}" already exists for product "${barcodeCheck.conflictProduct?.name}".`);
+  }
+
+  // Multi-field duplicate similarity verification (Requirements 5, 6, 14, 22)
+  const differentiatorProvided = Boolean(data.bypassDuplicateReason || data.confirmDifferentiator?.reason);
+  if (!differentiatorProvided) {
+    const similarProducts = findSimilarProducts(storeDb.products, {
+      name: data.name,
+      sku: normalizedSku,
+      barcodeValue: rawBarcode,
+      brand: data.brand,
+      categoryId: data.categoryId,
+      manufacturerModelNumber: data.manufacturerModelNumber,
+    });
+
+    const highConfidenceMatch = similarProducts.find(
+      (m) => m.confidence === 'EXACT' || (m.confidence === 'HIGH' && m.score >= 85)
+    );
+
+    if (highConfidenceMatch) {
+      throw new Error(
+        `DUPLICATE_PRODUCT_WARNING: Possible duplicate detected with existing product "${highConfidenceMatch.product.name}" (SKU: ${highConfidenceMatch.product.sku}, Confidence: ${highConfidenceMatch.confidence}). To proceed, use the existing product or specify a differentiator reason.`
+      );
+    }
+  }
+
+  const pricing = validateProductPricing(data.mrp, data.price);
+  if (!pricing.isValid) {
+    throw new Error(pricing.error || 'Invalid product pricing');
+  }
+
   const initialStock = normalizeStockNumber(data.stockQuantity, 0);
   const lowStockThreshold = normalizeStockNumber(data.lowStockThreshold, 3);
   const status = data.status || 'published';
   const isArchived = status === 'archived' || Boolean(data.isArchived);
   const isActive = isArchived ? false : data.isActive !== undefined ? data.isActive : true;
 
+  const safeData = { ...data };
+  delete safeData.discountPercentage;
+
   const newProduct: Product = {
-    ...data,
+    ...safeData,
     id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    name: data.name,
+    sku: normalizedSku,
+    barcodeValue: rawBarcode,
+    manufacturerModelNumber: data.manufacturerModelNumber?.trim() || undefined,
     slug: data.slug || data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
-    discountPercentage: discountPct,
+    categoryId: data.categoryId || 'b0000000-0000-0000-0000-000000000001',
+    categoryName: data.categoryName || 'General',
+    description: data.description || '',
+    price: pricing.sellingPrice,
+    mrp: pricing.mrp,
+    discountPercentage: pricing.discountPercentage,
     stockQuantity: initialStock,
     reservedStock: 0,
     lowStockThreshold,
+    minOrderQuantity: data.minOrderQuantity || 1,
+    maxOrderQuantity: data.maxOrderQuantity || 10,
+    tags: data.tags || [],
+    brand: data.brand || 'Jainam Traders',
+    isFeatured: Boolean(data.isFeatured),
+    isNewArrival: Boolean(data.isNewArrival),
+    isBestSeller: Boolean(data.isBestSeller),
     status,
     isArchived,
     isActive,
-    thumbnailUrl: data.thumbnailUrl || '/images/product-placeholder.svg',
-    images: data.images && data.images.length > 0 ? data.images : [data.thumbnailUrl || '/images/product-placeholder.svg'],
+    thumbnailUrl: data.thumbnailUrl || (data.images && data.images[0]) || '/images/product-placeholder.svg',
+    images: data.images && data.images.length > 0 ? data.images : (data.thumbnailUrl ? [data.thumbnailUrl] : ['/images/product-placeholder.svg']),
+    videoUrl: data.videoUrl,
+    searchKeywords: data.searchKeywords,
+    searchIndex: buildProductSearchIndex({ ...safeData, sku: normalizedSku, barcodeValue: rawBarcode, manufacturerModelNumber: data.manufacturerModelNumber, price: pricing.sellingPrice, mrp: pricing.mrp }),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -499,9 +463,14 @@ export async function createAdminProduct(
   storeDb.logAudit(actorId, 'admin', 'CREATE_PRODUCT', 'products', newProduct.id, {
     name: newProduct.name,
     sku: newProduct.sku,
+    barcodeValue: newProduct.barcodeValue,
+    manufacturerModelNumber: newProduct.manufacturerModelNumber,
+    differentiatorReason: data.confirmDifferentiator?.reason || data.bypassDuplicateReason,
+    differentiatorNote: data.confirmDifferentiator?.note,
     initialStock,
     price: newProduct.price,
     mrp: newProduct.mrp,
+    discountPercentage: newProduct.discountPercentage,
   });
 
   return newProduct;
@@ -509,7 +478,7 @@ export async function createAdminProduct(
 
 export async function updateAdminProduct(
   id: string,
-  updates: Partial<Product>,
+  updates: Partial<Product> & { priceChangeReason?: string },
   actorId?: string
 ): Promise<Product> {
   const index = storeDb.products.findIndex((p) => p.id === id);
@@ -517,16 +486,49 @@ export async function updateAdminProduct(
 
   const existing = storeDb.products[index];
 
+  // SKU and Barcode Collision Verification
+  let finalSku = existing.sku;
+  let finalBarcode = existing.barcodeValue || existing.sku;
+
+  if (updates.sku && normalizeBarcodeValue(updates.sku) !== normalizeBarcodeValue(existing.sku)) {
+    const newSku = normalizeBarcodeValue(updates.sku);
+    const skuCheck = checkBarcodeUniqueness(storeDb.products, newSku, id);
+    if (!skuCheck.isUnique) {
+      throw new Error(`Duplicate SKU rejected: SKU "${newSku}" already exists for product "${skuCheck.conflictProduct?.name}".`);
+    }
+    finalSku = newSku;
+    // By default, if barcode derived from SKU, keep in sync
+    if (!updates.barcodeValue || updates.barcodeValue === existing.sku) {
+      finalBarcode = newSku;
+    }
+  }
+
+  if (updates.barcodeValue && normalizeBarcodeValue(updates.barcodeValue) !== normalizeBarcodeValue(finalBarcode)) {
+    const newBarcode = normalizeBarcodeValue(updates.barcodeValue);
+    const bcCheck = checkBarcodeUniqueness(storeDb.products, newBarcode, id);
+    if (!bcCheck.isUnique) {
+      throw new Error(`Duplicate barcode rejected: Barcode "${newBarcode}" already exists for product "${bcCheck.conflictProduct?.name}".`);
+    }
+    finalBarcode = newBarcode;
+  }
+
   // Price validation: selling price must not exceed MRP
   const finalPrice = updates.price !== undefined ? updates.price : existing.price;
   const finalMrp = updates.mrp !== undefined ? updates.mrp : existing.mrp;
-  if (finalPrice <= 0) throw new Error('Selling price must be greater than 0');
-  if (finalPrice > finalMrp) throw new Error(`Selling price (₹${finalPrice}) cannot exceed MRP (₹${finalMrp})`);
 
-  // Protect inventory from direct edits: stock must be changed via adjust stock
-  const safeUpdates: Partial<Product> = { ...updates };
+  const pricing = validateProductPricing(finalMrp, finalPrice);
+  if (!pricing.isValid) {
+    throw new Error(pricing.error || 'Invalid product pricing');
+  }
+
+  const isPriceChanged = existing.mrp !== pricing.mrp || existing.price !== pricing.sellingPrice;
+  const prevDiscount = calculateDiscountPercentage(existing.mrp, existing.price);
+
+  // Protect inventory and server-derived values from direct tampering
+  const safeUpdates: Partial<Product> & { priceChangeReason?: string } = { ...updates };
   delete safeUpdates.reservedStock;
   delete safeUpdates.stockQuantity;
+  delete (safeUpdates as Record<string, unknown>).discountPercentage;
 
   let status = safeUpdates.status || existing.status || 'published';
   let isArchived = Boolean(safeUpdates.isArchived ?? existing.isArchived);
@@ -546,27 +548,48 @@ export async function updateAdminProduct(
     status = 'hidden';
   }
 
-  const discountPercentage =
-    finalMrp > 0 ? Math.round(((finalMrp - finalPrice) / finalMrp) * 100) : 0;
-
   const updated: Product = {
     ...existing,
     ...safeUpdates,
-    price: finalPrice,
-    mrp: finalMrp,
-    discountPercentage,
+    sku: finalSku,
+    barcodeValue: finalBarcode,
+    price: pricing.sellingPrice,
+    mrp: pricing.mrp,
+    discountPercentage: pricing.discountPercentage,
     status,
     isArchived,
     isActive,
     updatedAt: new Date().toISOString(),
   };
 
+  updated.searchIndex = buildProductSearchIndex(updated);
+
   storeDb.products[index] = updated;
+
+  // Record PRICE_CHANGE audit log whenever MRP or Selling Price changes
+  if (isPriceChanged) {
+    storeDb.logAudit(actorId, 'admin', 'PRICE_CHANGE', 'products', id, {
+      productId: id,
+      productName: updated.name,
+      previousMrp: existing.mrp,
+      newMrp: pricing.mrp,
+      previousSellingPrice: existing.price,
+      newSellingPrice: pricing.sellingPrice,
+      calculatedPreviousDiscount: prevDiscount,
+      calculatedNewDiscount: pricing.discountPercentage,
+      staffUser: actorId || 'system',
+      role: 'owner',
+      timestamp: new Date().toISOString(),
+      reason: safeUpdates.priceChangeReason || (safeUpdates as Record<string, unknown>).reason || 'Price updated in admin catalogue',
+    });
+  }
+
   storeDb.logAudit(actorId, 'admin', 'UPDATE_PRODUCT', 'products', id, {
     name: updated.name,
     sku: updated.sku,
     price: updated.price,
     mrp: updated.mrp,
+    discountPercentage: updated.discountPercentage,
     status: updated.status,
   });
 
@@ -609,6 +632,19 @@ export async function unarchiveAdminProduct(id: string, actorId?: string): Promi
   });
 
   return existing;
+}
+
+export async function deleteAdminProductPermanent(id: string, actorId?: string): Promise<Product> {
+  const index = storeDb.products.findIndex((p) => p.id === id);
+  if (index === -1) throw new Error('Product not found');
+
+  const removed = storeDb.products.splice(index, 1)[0];
+  storeDb.logAudit(actorId, 'admin', 'PERMANENT_DELETE_PRODUCT', 'products', id, {
+    name: removed.name,
+    sku: removed.sku,
+  });
+
+  return removed;
 }
 
 export async function adjustInventory(
@@ -669,8 +705,11 @@ export interface CreateOrderParams {
   customerName: string;
   customerPhone: string;
   customerEmail?: string;
+  idempotencyKey?: string;
+  reservationHours?: number;
   items: RawCheckoutItem[];
   couponCode?: string;
+  giftCode?: string;
   pickupMode: 'FLEXIBLE' | 'SLOT';
   pickupSlotDate?: string;
   pickupSlotTime?: string;
@@ -680,8 +719,34 @@ export interface CreateOrderParams {
 export async function createPickupOrder(params: CreateOrderParams): Promise<Order> {
   // Execute within concurrency reservation lock to guarantee no double-booking of last unit
   return storeDb.withReservationLock(async () => {
+    // 0. Idempotency Check: if identical request key already exists, return existing order
+    if (params.idempotencyKey && params.idempotencyKey.trim()) {
+      const existing = storeDb.orders.find((o) => o.idempotencyKey === params.idempotencyKey);
+      if (existing) {
+        return existing;
+      }
+    }
+
+    if (!params.customerId || !params.customerId.trim()) {
+      throw new Error('Customer authentication identity is required to reserve store inventory');
+    }
+
     if (!params.items || params.items.length === 0) {
       throw new Error('Order must contain at least one item');
+    }
+
+    // 0. Enforce Customer Account Status (Part 4)
+    const custAccount =
+      customerStore.findByIdOrUserId(params.customerId) ||
+      (params.customerEmail ? customerStore.findByEmail(params.customerEmail) : null);
+
+    if (custAccount) {
+      if (custAccount.accountStatus === 'SUSPENDED') {
+        throw new Error('Your customer account is currently suspended. You cannot place new reservations or pickup orders.');
+      }
+      if (custAccount.accountStatus === 'DEACTIVATED') {
+        throw new Error('Your customer account has been deactivated. Please contact store management.');
+      }
     }
 
     const validatedItems: ValidatedItem[] = [];
@@ -742,46 +807,105 @@ export async function createPickupOrder(params: CreateOrderParams): Promise<Orde
       });
     }
 
-    // 2. Validate Coupon and calculate pricing server-side
+    const rawSubtotal = validatedItems.reduce((acc, item) => acc + item.totalPrice, 0);
+
+    // 2. Resolve Coupon
     let coupon: Coupon | undefined = undefined;
     if (params.couponCode) {
       coupon = storeDb.coupons.find((c) => c.code.toUpperCase() === params.couponCode!.toUpperCase());
     }
 
+    // 3. Resolve Gift Code (Part 25 & 26)
+    let giftCodeItem: GiftCode | undefined = undefined;
+    if (params.giftCode) {
+      const cleanGift = normalizeGiftCode(params.giftCode);
+      const codeHash = hashGiftCode(cleanGift);
+      giftCodeItem = storeDb.giftCodes.find((g) => g.codeHash === codeHash || g.code === cleanGift);
+      if (!giftCodeItem) {
+        throw new Error(`Gift code '${cleanGift}' does not exist.`);
+      }
+    }
+
     const previousOrdersCount = storeDb.orders.filter((o) => o.customerId === params.customerId).length;
     const isFirstOrder = previousOrdersCount === 0;
 
-    const pricing = calculateOrderPricing(validatedItems, coupon, isFirstOrder);
+    // 4. Centralized Stacking & Discount Engine (Part 34)
+    const discountCalc = calculateOrderDiscounts({
+      subtotal: rawSubtotal,
+      coupon,
+      giftCode: giftCodeItem,
+      customerId: custAccount?.id || params.customerId,
+      isCustomerFirstOrder: isFirstOrder,
+      allowStacking: true,
+    });
 
-    // 3. Atomically Reserve Inventory
-    for (const item of params.items) {
-      const prod = storeDb.products.find((p) => p.id === item.productId)!;
-      if (item.variantId) {
-        const variant = prod.variants?.find((v) => v.id === item.variantId)!;
-        variant.reservedStock += item.quantity;
-      } else {
-        prod.reservedStock += item.quantity;
-      }
-
-      // Audit movement
-      storeDb.inventoryMovements.unshift({
-        id: `res-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        productId: prod.id,
-        productName: prod.name,
-        variantId: item.variantId,
-        quantityChange: item.quantity,
-        previousStock: prod.stockQuantity,
-        newStock: prod.stockQuantity,
-        reason: 'reservation',
-        notes: `Reserved for customer order`,
-        actorId: params.customerId,
-        createdAt: new Date().toISOString(),
-      });
+    if (discountCalc.couponError && params.couponCode) {
+      throw new Error(discountCalc.couponError);
+    }
+    if (discountCalc.giftCodeError && params.giftCode) {
+      throw new Error(discountCalc.giftCodeError);
     }
 
-    // 4. Update coupon usage count if applied
-    if (pricing.appliedCoupon) {
-      const cIndex = storeDb.coupons.findIndex((c) => c.id === pricing.appliedCoupon!.id);
+    // 5. Atomically Reserve Inventory with Rollback Protection
+    const reservedRollbackList: Array<{ productId: string; variantId?: string; quantity: number }> = [];
+    try {
+      for (const item of params.items) {
+        const prod = storeDb.products.find((p) => p.id === item.productId)!;
+        if (item.variantId) {
+          const variant = prod.variants?.find((v) => v.id === item.variantId)!;
+          const availableUnits = variant.stockQuantity - variant.reservedStock;
+          if (availableUnits < item.quantity) {
+            throw new Error(
+              `Sorry! "${prod.name} (${variant.title})" is currently out of stock for pickup (Available: ${availableUnits}).`
+            );
+          }
+          variant.reservedStock += item.quantity;
+          reservedRollbackList.push({ productId: prod.id, variantId: item.variantId, quantity: item.quantity });
+        } else {
+          const availableUnits = prod.stockQuantity - prod.reservedStock;
+          if (availableUnits < item.quantity) {
+            throw new Error(
+              `Sorry! "${prod.name}" has only ${availableUnits} unit(s) remaining for pickup. Your requested quantity (${item.quantity}) cannot be reserved.`
+            );
+          }
+          prod.reservedStock += item.quantity;
+          reservedRollbackList.push({ productId: prod.id, quantity: item.quantity });
+        }
+
+        // Audit movement
+        storeDb.inventoryMovements.unshift({
+          id: `res-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          productId: prod.id,
+          productName: prod.name,
+          variantId: item.variantId,
+          quantityChange: item.quantity,
+          previousStock: prod.stockQuantity,
+          newStock: prod.stockQuantity,
+          reason: 'reservation',
+          notes: `Reserved for customer order`,
+          actorId: params.customerId,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    } catch (reserveError) {
+      // Rollback all partial reservations for this order
+      for (const rb of reservedRollbackList) {
+        const prod = storeDb.products.find((p) => p.id === rb.productId);
+        if (prod) {
+          if (rb.variantId) {
+            const v = prod.variants?.find((varItem) => varItem.id === rb.variantId);
+            if (v) v.reservedStock = Math.max(0, v.reservedStock - rb.quantity);
+          } else {
+            prod.reservedStock = Math.max(0, prod.reservedStock - rb.quantity);
+          }
+        }
+      }
+      throw reserveError;
+    }
+
+    // 6. Update coupon usage count if applied
+    if (discountCalc.appliedCoupon) {
+      const cIndex = storeDb.coupons.findIndex((c) => c.id === discountCalc.appliedCoupon!.id);
       if (cIndex !== -1) {
         storeDb.coupons[cIndex].usedCount += 1;
       }
@@ -790,9 +914,67 @@ export async function createPickupOrder(params: CreateOrderParams): Promise<Orde
     const orderNumber = storeDb.generateNextOrderNumber();
     const qrToken = `JT-QR-${orderNumber}-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
 
+    // 7. Atomically Redeem Gift Code if applied (Part 26 & 28)
+    let appliedGiftDiscount = 0;
+    let appliedGiftId: string | undefined = undefined;
+    let appliedGiftCodeStr: string | undefined = undefined;
+
+    if (giftCodeItem && discountCalc.giftCodeDiscount > 0) {
+      appliedGiftDiscount = discountCalc.giftCodeDiscount;
+      appliedGiftId = giftCodeItem.id;
+      appliedGiftCodeStr = giftCodeItem.maskedCode; // Order snapshot always stores maskedCode!
+
+      if (giftCodeItem.remainingValue < appliedGiftDiscount || giftCodeItem.status !== 'ACTIVE') {
+        throw new Error(`Gift code balance is no longer available.`);
+      }
+
+      const previousVal = giftCodeItem.remainingValue;
+      const newVal = previousVal - appliedGiftDiscount;
+      if (newVal < 0) {
+        throw new Error('Gift code balance cannot be negative.');
+      }
+
+      giftCodeItem.remainingValue = newVal;
+      giftCodeItem.redemptionCount += 1;
+      if (newVal === 0 || giftCodeItem.redemptionCount >= giftCodeItem.maxRedemptions) {
+        giftCodeItem.status = 'REDEEMED';
+      }
+      giftCodeItem.updatedAt = new Date().toISOString();
+
+      // Record immutable redemption audit record
+      storeDb.giftCodeRedemptions.unshift({
+        id: `red-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        giftCodeId: giftCodeItem.id,
+        code: giftCodeItem.maskedCode,
+        orderId: '', // Populated below
+        orderNumber,
+        customerId: params.customerId,
+        customerName: params.customerName,
+        amountApplied: appliedGiftDiscount,
+        previousRemainingValue: previousVal,
+        newRemainingValue: newVal,
+        action: 'REDEEMED',
+        actorId: params.customerId,
+        actorRole: 'customer',
+        idempotencyKey: `ord-${orderNumber}-gift`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const orderId = `ord-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+
+    // Update orderId on redemption log if created
+    if (storeDb.giftCodeRedemptions[0]?.orderNumber === orderNumber) {
+      storeDb.giftCodeRedemptions[0].orderId = orderId;
+    }
+
+    const reservationHours = params.reservationHours || 24;
+    const reservationExpiresAt = new Date(Date.now() + reservationHours * 60 * 60 * 1000).toISOString();
+
     const order: Order = {
-      id: `ord-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: orderId,
       orderNumber,
+      idempotencyKey: params.idempotencyKey,
       customerId: params.customerId,
       customerName: params.customerName,
       customerPhone: params.customerPhone,
@@ -800,23 +982,32 @@ export async function createPickupOrder(params: CreateOrderParams): Promise<Orde
       status: 'PENDING',
       paymentStatus: 'UNPAID',
       paymentMethod: 'Pay at Shop',
-      subtotal: pricing.subtotal,
-      discount: pricing.couponDiscount,
-      totalAmount: pricing.finalPayableAmount,
-      couponCode: pricing.appliedCoupon?.code,
+      subtotal: discountCalc.subtotal,
+      discount: discountCalc.couponDiscount,
+      totalAmount: discountCalc.netPayableAtCounter,
+      amountDue: discountCalc.netPayableAtCounter,
+      amountReceived: 0,
+      couponCode: discountCalc.appliedCoupon?.code,
+      giftCode: appliedGiftCodeStr,
+      giftCodeDiscount: appliedGiftDiscount,
+      giftCodeId: appliedGiftId,
+      netPayableAtCounter: discountCalc.netPayableAtCounter,
       pickupMode: params.pickupMode,
       pickupSlotDate: params.pickupSlotDate,
       pickupSlotTime: params.pickupSlotTime,
       customerNotes: params.customerNotes,
       qrToken,
+      reservationExpiresAt,
       items: validatedItems.map((v) => ({
         id: `item-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        orderId: '',
+        orderId,
         productId: v.productId,
         variantId: v.variantId,
         productName: v.productName,
         variantName: v.variantName,
         unitPrice: v.unitPrice,
+        mrp: v.mrp,
+        discountPercentage: calculateDiscountPercentage(v.mrp, v.unitPrice),
         quantity: v.quantity,
         totalPrice: v.totalPrice,
         thumbnailUrl: v.thumbnailUrl,
@@ -824,7 +1015,7 @@ export async function createPickupOrder(params: CreateOrderParams): Promise<Orde
       statusHistory: [
         {
           id: `hist-${Date.now()}`,
-          orderId: '',
+          orderId,
           toStatus: 'PENDING',
           note: 'Order placed by customer for pickup at Jainam Traders counter.',
           changedBy: params.customerId,
@@ -835,11 +1026,26 @@ export async function createPickupOrder(params: CreateOrderParams): Promise<Orde
       updatedAt: new Date().toISOString(),
     };
 
-    // Link back IDs
-    order.items.forEach((item) => (item.orderId = order.id));
-    order.statusHistory.forEach((h) => (h.orderId = order.id));
-
     storeDb.orders.unshift(order);
+
+    // Record immutable customer activity event (Part 8)
+    storeDb.customerActivity.unshift({
+      id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      customerId: params.customerId,
+      eventType: 'ORDER_PLACED',
+      description: `Placed pickup order ${order.orderNumber} for ₹${order.totalAmount} (Payable at shop).`,
+      actorId: params.customerId,
+      actorRole: 'customer',
+      metadata: {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        subtotal: order.subtotal,
+        giftCode: order.giftCode,
+        giftCodeDiscount: order.giftCodeDiscount,
+        payableAtCounter: order.totalAmount,
+      },
+      createdAt: new Date().toISOString(),
+    });
 
     // Notify customer
     storeDb.notifications.unshift({
@@ -856,6 +1062,8 @@ export async function createPickupOrder(params: CreateOrderParams): Promise<Orde
     storeDb.logAudit(params.customerId, 'customer', 'CREATE_ORDER', 'orders', order.id, {
       orderNumber: order.orderNumber,
       totalAmount: order.totalAmount,
+      giftCode: order.giftCode,
+      giftCodeDiscount: order.giftCodeDiscount,
     });
 
     return order;
@@ -885,8 +1093,8 @@ export async function transitionOrderStatus(
     order.status = nextStatus;
     order.updatedAt = new Date().toISOString();
 
-    // Side effect 1: If CANCELLED, release reserved stock back to available pool
-    if (nextStatus === 'CANCELLED') {
+    // Side effect 1: If CANCELLED or EXPIRED, release reserved stock back to available pool
+    if (nextStatus === 'CANCELLED' || nextStatus === 'EXPIRED') {
       for (const item of order.items) {
         const prod = storeDb.products.find((p) => p.id === item.productId);
         if (prod) {
@@ -907,17 +1115,78 @@ export async function transitionOrderStatus(
             newStock: prod.stockQuantity,
             reason: 'release_reservation',
             orderId: order.id,
-            notes: `Released reservation upon order cancellation (${order.orderNumber})`,
+            notes: `Released reservation upon order ${nextStatus.toLowerCase()} (${order.orderNumber})`,
             actorId,
             createdAt: new Date().toISOString(),
           });
         }
       }
+
+      // Restore gift code if redeemed on this order (Part 26 & 29)
+      if (order.giftCodeId || order.giftCode) {
+        const redemptions = storeDb.giftCodeRedemptions.filter(
+          (r) => (r.orderId === order.id || r.orderNumber === order.orderNumber) && r.action === 'REDEEMED'
+        );
+
+        for (const red of redemptions) {
+          const gift = storeDb.giftCodes.find((g) => g.id === red.giftCodeId);
+          if (gift) {
+            const previousRemaining = gift.remainingValue;
+            const newRemaining = Math.min(gift.originalValue, previousRemaining + red.amountApplied);
+
+            gift.remainingValue = newRemaining;
+            gift.redemptionCount = Math.max(0, gift.redemptionCount - 1);
+            if (gift.status === 'REDEEMED') {
+              gift.status = 'ACTIVE';
+            }
+            gift.updatedAt = new Date().toISOString();
+
+            storeDb.giftCodeRedemptions.unshift({
+              id: `rest-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+              giftCodeId: gift.id,
+              code: gift.maskedCode,
+              orderId: order.id,
+              orderNumber: order.orderNumber,
+              customerId: red.customerId,
+              customerName: red.customerName,
+              amountApplied: red.amountApplied,
+              previousRemainingValue: previousRemaining,
+              newRemainingValue: newRemaining,
+              action: 'RESTORED',
+              actorId: actorId || 'system',
+              actorRole: actorRole || 'system',
+              reason: `Order ${nextStatus.toLowerCase()} before pickup`,
+              timestamp: new Date().toISOString(),
+            });
+
+            storeDb.logAudit(actorId, actorRole, 'RESTORE_GIFT_CODE', 'gift_codes', gift.id, {
+              orderNumber: order.orderNumber,
+              amountRestored: red.amountApplied,
+              newRemainingValue: newRemaining,
+            });
+          }
+        }
+      }
+
+      // Customer activity log for cancellation or expiration
+      storeDb.customerActivity.unshift({
+        id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        customerId: order.customerId,
+        eventType: nextStatus === 'CANCELLED' ? 'ORDER_CANCELLED' : 'ORDER_EXPIRED',
+        description: `Order ${order.orderNumber} was ${nextStatus.toLowerCase()}.`,
+        actorId,
+        actorRole: actorRole === 'customer' ? 'customer' : 'staff',
+        createdAt: new Date().toISOString(),
+      });
     }
 
     // Side effect 2: If PICKED_UP, finalize deduction (decrement stockQuantity and reservedStock) & mark PAID
     if (nextStatus === 'PICKED_UP') {
       order.paymentStatus = 'PAID';
+      order.amountReceived = order.totalAmount;
+      order.amountDue = 0;
+      order.paymentRecordedAt = new Date().toISOString();
+      order.paymentRecordedBy = actorId || 'counter_staff';
       for (const item of order.items) {
         const prod = storeDb.products.find((p) => p.id === item.productId);
         if (prod) {
@@ -970,10 +1239,16 @@ export async function transitionOrderStatus(
       notifMessage = `We have confirmed your order ${order.orderNumber} and started assembling your items.`;
     } else if (nextStatus === 'READY_FOR_PICKUP') {
       notifTitle = 'Your Order is Ready for Pickup!';
-      notifMessage = `Order ${order.orderNumber} is packed and ready at our counter. Please visit during store hours (09:30 - 21:30) to collect and pay.`;
+      notifMessage = `Order ${order.orderNumber} is packed and ready at our counter. Please visit during store hours (07:30 - 21:30) to collect and pay.`;
     } else if (nextStatus === 'PICKED_UP') {
       notifTitle = 'Order Picked Up & Paid';
       notifMessage = `Thank you for shopping with Jainam Traders! We hope you love your purchase.`;
+    } else if (nextStatus === 'CANCELLED') {
+      notifTitle = 'Order Reservation Cancelled';
+      notifMessage = `Your reservation ${order.orderNumber} has been cancelled. Reserved inventory was released back to the store.`;
+    } else if (nextStatus === 'EXPIRED') {
+      notifTitle = 'Pickup Reservation Expired';
+      notifMessage = `Your pickup reservation ${order.orderNumber} has expired. Reserved inventory was released back to the store.`;
     }
 
     storeDb.notifications.unshift({
@@ -995,6 +1270,29 @@ export async function transitionOrderStatus(
 
     return order;
   });
+}
+
+/**
+ * Update internal admin notes for an order
+ */
+export async function updateOrderAdminNotes(
+  orderId: string,
+  adminNotes: string,
+  actorRole: UserRole,
+  actorId?: string
+): Promise<Order> {
+  const order = storeDb.orders.find((o) => o.id === orderId || o.orderNumber === orderId);
+  if (!order) throw new Error('Order not found');
+
+  order.adminNotes = adminNotes;
+  order.updatedAt = new Date().toISOString();
+
+  storeDb.logAudit(actorId, actorRole, 'UPDATE_ORDER_NOTES', 'orders', order.id, {
+    orderNumber: order.orderNumber,
+    adminNotes,
+  });
+
+  return order;
 }
 
 /**
@@ -1126,13 +1424,73 @@ export async function recordPhysicalRefund(
   receiptNumber: string,
   notes: string,
   staffId: string,
-  staffName: string
+  staffName: string,
+  idempotencyKey?: string
 ): Promise<RefundRecord> {
   const order = storeDb.orders.find((o) => o.id === orderId || o.orderNumber === orderId);
   if (!order) throw new Error('Order not found');
 
+  // 1. Idempotency Check: if refund with this idempotencyKey or receiptNumber already exists, return existing
+  if (idempotencyKey) {
+    const existingByIdempotency = storeDb.refundRecords.find((r) => r.idempotencyKey === idempotencyKey);
+    if (existingByIdempotency) return existingByIdempotency;
+  }
+  const existingByReceipt = storeDb.refundRecords.find((r) => r.receiptNumber === receiptNumber && r.orderId === order.id);
+  if (existingByReceipt) return existingByReceipt;
+
+  const maxCashPaid = order.netPayableAtCounter ?? order.totalAmount;
+  if ((refundMethod === 'cash' || refundMethod === 'upi') && refundAmount > maxCashPaid) {
+    throw new Error(
+      `Cash/UPI refund amount (₹${refundAmount}) cannot exceed the customer's actual counter payment (₹${maxCashPaid}). If a gift code was used, the gift code balance must be restored.`
+    );
+  }
+
+  // Side effect: If order had a redeemed gift code, restore balance back to gift code (Part 29)
+  // Enforce idempotency: only restore if not already restored for this order
+  const alreadyRestored = storeDb.giftCodeRedemptions.some(
+    (r) => (r.orderId === order.id || r.orderNumber === order.orderNumber) && r.action === 'RESTORED'
+  );
+
+  if (!alreadyRestored && (order.giftCodeId || order.giftCode)) {
+    const redemptions = storeDb.giftCodeRedemptions.filter(
+      (r) => (r.orderId === order.id || r.orderNumber === order.orderNumber) && r.action === 'REDEEMED'
+    );
+    for (const red of redemptions) {
+      const gift = storeDb.giftCodes.find((g) => g.id === red.giftCodeId);
+      if (gift) {
+        const prev = gift.remainingValue;
+        const restoredAmt = Math.min(gift.originalValue - prev, red.amountApplied);
+        if (restoredAmt > 0) {
+          gift.remainingValue = prev + restoredAmt;
+          gift.redemptionCount = Math.max(0, gift.redemptionCount - 1);
+          if (gift.status === 'REDEEMED') gift.status = 'ACTIVE';
+          gift.updatedAt = new Date().toISOString();
+
+          storeDb.giftCodeRedemptions.unshift({
+            id: `rest-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            giftCodeId: gift.id,
+            code: gift.maskedCode,
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            customerId: red.customerId,
+            customerName: red.customerName,
+            amountApplied: restoredAmt,
+            previousRemainingValue: prev,
+            newRemainingValue: gift.remainingValue,
+            action: 'RESTORED',
+            actorId: staffId,
+            actorRole: 'staff',
+            reason: `Restored on return/refund for order ${order.orderNumber}`,
+            idempotencyKey: `ref-rest-${order.id}-${gift.id}`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+    }
+  }
+
   const record: RefundRecord = {
-    id: `ref-${Date.now()}`,
+    id: `ref-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     returnRequestId,
     orderId: order.id,
     orderNumber: order.orderNumber,
@@ -1142,6 +1500,7 @@ export async function recordPhysicalRefund(
     notes,
     recordedBy: staffId,
     staffName,
+    idempotencyKey,
     createdAt: new Date().toISOString(),
   };
 
@@ -1153,6 +1512,17 @@ export async function recordPhysicalRefund(
     const req = storeDb.returnRequests.find((r) => r.id === returnRequestId);
     if (req) req.status = 'REFUND_RECORDED';
   }
+
+  // Record customer activity
+  storeDb.customerActivity.unshift({
+    id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    customerId: order.customerId,
+    eventType: 'REFUND_RECORDED',
+    description: `Refund of ₹${refundAmount} recorded via ${refundMethod.toUpperCase()} (Receipt: ${receiptNumber}).`,
+    actorId: staffId,
+    actorRole: 'staff',
+    createdAt: new Date().toISOString(),
+  });
 
   storeDb.logAudit(staffId, 'store_manager', 'RECORD_REFUND', 'refund_records', record.id, {
     refundAmount,
@@ -1473,3 +1843,93 @@ export async function getDashboardAnalytics(): Promise<{
     recentOrders: storeDb.orders.slice(0, 10),
   };
 }
+
+export interface RecordPaymentParams {
+  orderId: string;
+  amountReceived: number;
+  paymentMethod: 'Cash' | 'UPI';
+  staffId: string;
+  staffRole: UserRole;
+  notes?: string;
+}
+
+/**
+ * Record Counter Payment (Cash or UPI) at Jainam Traders shop counter.
+ * Pay at Shop is the authoritative payment method.
+ */
+export async function recordOrderPayment(params: RecordPaymentParams): Promise<Order> {
+  return storeDb.withReservationLock(async () => {
+    const order = storeDb.orders.find((o) => o.id === params.orderId || o.orderNumber === params.orderId);
+    if (!order) {
+      throw new Error(`Order ${params.orderId} not found`);
+    }
+
+    if (params.amountReceived <= 0) {
+      throw new Error('Payment amount must be greater than zero');
+    }
+
+    const currentReceived = order.amountReceived || 0;
+    const newTotalReceived = currentReceived + params.amountReceived;
+    const totalPayable = order.totalAmount;
+
+    let newStatus: PaymentStatus = 'PARTIALLY_PAID';
+    if (newTotalReceived >= totalPayable) {
+      newStatus = 'PAID';
+    }
+
+    order.amountReceived = newTotalReceived;
+    order.amountDue = Math.max(0, totalPayable - newTotalReceived);
+    order.paymentStatus = newStatus;
+    order.paymentRecordedAt = new Date().toISOString();
+    order.paymentRecordedBy = params.staffId;
+    order.updatedAt = new Date().toISOString();
+
+    storeDb.logAudit(params.staffId, params.staffRole, 'RECORD_COUNTER_PAYMENT', 'orders', order.id, {
+      orderNumber: order.orderNumber,
+      amountRecorded: params.amountReceived,
+      newTotalReceived,
+      amountDue: order.amountDue,
+      paymentMethod: params.paymentMethod,
+      paymentStatus: newStatus,
+      notes: params.notes,
+    });
+
+    return order;
+  });
+}
+
+/**
+ * Server-side cleanup mechanism/cron-safe function for expired reservations.
+ * Finds PENDING and CONFIRMED orders whose reservationExpiresAt has passed,
+ * releases reserved inventory back to catalogue, and restores any gift codes.
+ */
+export async function cleanupExpiredReservations(actorId: string = 'system_cron'): Promise<{
+  expiredCount: number;
+  expiredOrderNumbers: string[];
+}> {
+  const now = new Date();
+  const expiredOrders = storeDb.orders.filter((o) => {
+    if (o.status !== 'PENDING' && o.status !== 'CONFIRMED') return false;
+    if (!o.reservationExpiresAt) return false;
+    return new Date(o.reservationExpiresAt) <= now;
+  });
+
+  const expiredOrderNumbers: string[] = [];
+
+  for (const order of expiredOrders) {
+    await transitionOrderStatus(
+      order.id,
+      'EXPIRED',
+      'admin',
+      actorId,
+      'Auto-expired by reservation cleanup: pickup deadline elapsed without confirmation/collection'
+    );
+    expiredOrderNumbers.push(order.orderNumber);
+  }
+
+  return {
+    expiredCount: expiredOrderNumbers.length,
+    expiredOrderNumbers,
+  };
+}
+

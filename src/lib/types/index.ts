@@ -11,6 +11,7 @@ export type OrderStatus =
   | 'READY_FOR_PICKUP'
   | 'PICKED_UP'
   | 'CANCELLED'
+  | 'EXPIRED'
   | 'RETURN_REQUESTED'
   | 'RETURN_APPROVED'
   | 'RETURN_REJECTED'
@@ -39,6 +40,128 @@ export type InventoryMovementReason =
   | 'reservation'
   | 'release_reservation';
 
+export type CustomerAccountStatus = 'ACTIVE' | 'SUSPENDED' | 'DEACTIVATED';
+
+export interface CustomerStaffNote {
+  id: string;
+  customerId: string;
+  note: string;
+  authorId: string;
+  authorName: string;
+  authorRole: 'owner' | 'store_manager' | 'staff';
+  createdAt: string;
+}
+
+export type CustomerActivityEventType =
+  | 'ACCOUNT_CREATED'
+  | 'LOGIN'
+  | 'PROFILE_COMPLETED'
+  | 'PROFILE_UPDATED'
+  | 'ORDER_PLACED'
+  | 'ORDER_CONFIRMED'
+  | 'ORDER_READY'
+  | 'ORDER_PICKED_UP'
+  | 'ORDER_CANCELLED'
+  | 'ORDER_EXPIRED'
+  | 'RETURN_REQUESTED'
+  | 'RETURN_APPROVED'
+  | 'RETURN_REJECTED'
+  | 'RETURNED'
+  | 'REFUND_RECORDED'
+  | 'REVIEW_SUBMITTED'
+  | 'GIFT_CODE_ISSUED'
+  | 'GIFT_CODE_REDEEMED'
+  | 'GIFT_CODE_RESTORED'
+  | 'STATUS_CHANGED';
+
+export interface CustomerActivityEvent {
+  id: string;
+  customerId: string;
+  eventType: CustomerActivityEventType;
+  description: string;
+  metadata?: Record<string, unknown>;
+  actorId?: string;
+  actorRole: 'customer' | 'staff' | 'system';
+  createdAt: string;
+}
+
+export type GiftCodeStatus = 'ACTIVE' | 'PAUSED' | 'EXPIRED' | 'REDEEMED' | 'CANCELLED';
+export type GiftCodeType = 'FIXED_VALUE';
+
+export interface GiftCode {
+  id: string;
+  code: string;
+  codeHash: string;
+  maskedCode: string;
+  codeType: GiftCodeType;
+  originalValue: number;
+  remainingValue: number;
+  maxRedemptions: number;
+  redemptionCount: number;
+  customerId?: string;
+  customerEmail?: string;
+  customerName?: string;
+  createdBy: string;
+  createdByName: string;
+  startsAt?: string;
+  expiresAt?: string;
+  status: GiftCodeStatus;
+  minOrderValue?: number;
+  maxDiscount?: number;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GiftCodeRedemption {
+  id: string;
+  giftCodeId: string;
+  code: string;
+  orderId: string;
+  orderNumber: string;
+  customerId: string;
+  customerName?: string;
+  amountApplied: number;
+  previousRemainingValue: number;
+  newRemainingValue: number;
+  action: 'REDEEMED' | 'RESTORED' | 'CANCELLED_HOLD';
+  actorId: string;
+  actorRole: string;
+  idempotencyKey?: string;
+  reason?: string;
+  timestamp: string;
+}
+
+export interface CustomerProfile {
+  id: string;
+  userId: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  address: string;
+  languagePreference: 'en' | 'hi';
+  authenticationMethod: 'email_password' | 'google' | 'otp';
+  accountStatus: CustomerAccountStatus;
+  profileCompleted: boolean;
+  marketingCommunicationPreference: boolean;
+  lastKnownLoginAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  deactivatedAt?: string;
+  anonymizedAt?: string;
+}
+
+export interface CustomerCrmSummary {
+  totalOrders: number;
+  completedPickups: number;
+  cancelledOrders: number;
+  totalPurchaseValue: number;
+  totalRefunded: number;
+  activeGiftCodeBalance: number;
+  reviewsCount: number;
+  wishlistCount: number;
+}
+
 export interface UserProfile {
   id: string;
   fullName: string;
@@ -47,6 +170,9 @@ export interface UserProfile {
   role: UserRole;
   avatarUrl?: string;
   savedAddress?: string;
+  accountStatus?: CustomerAccountStatus;
+  languagePreference?: 'en' | 'hi';
+  profileCompleted?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -55,11 +181,22 @@ export interface ShopSettings {
   id: string;
   shopName: string;
   shopTagline: string;
+  brandTagline?: string;
   shopLogoUrl?: string;
   shopAddress: string;
+  shortAddress?: string;
+  landmark?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
   googleMapsUrl: string;
-  latitude: number;
-  longitude: number;
+  googleMapsPlaceUrl?: string;
+  googleMapsPlaceId?: string;
+  isLocationVerified?: boolean;
+  locationVerifiedAt?: string;
+  locationVerifiedBy?: string;
+  latitude?: number | null;
+  longitude?: number | null;
   phone: string;
   whatsappNumber: string;
   email: string;
@@ -117,6 +254,7 @@ export interface Product {
   id: string;
   name: string;
   sku: string;
+  barcodeValue?: string; // Derived from SKU or custom unique barcode value
   slug: string;
   categoryId: string;
   categoryName?: string;
@@ -146,13 +284,48 @@ export interface Product {
   isNewArrival: boolean;
   isBestSeller: boolean;
   isActive: boolean;
-  status?: 'published' | 'hidden' | 'archived';
+  status?: 'published' | 'draft' | 'hidden' | 'archived';
   isArchived?: boolean;
   variants?: ProductVariant[];
   averageRating?: number;
   reviewCount?: number;
+  searchKeywords?: string;
+  manufacturerModelNumber?: string;
+  searchIndex?: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+export type DuplicateConfidence = 'EXACT' | 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface SimilarProductMatch {
+  product: Product;
+  score: number; // 0 to 100
+  confidence: DuplicateConfidence;
+  matchedFields: Array<'sku' | 'barcode' | 'modelNumber' | 'exactName' | 'fuzzyName' | 'brandCategory' | 'tags'>;
+  matchReasons: string[];
+}
+
+export interface DuplicateCheckParams {
+  name: string;
+  sku?: string;
+  barcodeValue?: string;
+  brand?: string;
+  categoryId?: string;
+  subcategoryId?: string;
+  tags?: string[];
+  manufacturerModelNumber?: string;
+  excludeProductId?: string;
+}
+
+export interface DuplicateAuditGroup {
+  groupId: string;
+  canonicalProduct: Product;
+  similarProducts: Array<{
+    product: Product;
+    score: number;
+    reasons: string[];
+  }>;
 }
 
 // Customer safe view where exact stock number is hidden
@@ -229,6 +402,8 @@ export interface OrderItem {
   productName: string;
   variantName?: string;
   unitPrice: number;
+  mrp?: number;
+  discountPercentage?: number;
   quantity: number;
   totalPrice: number;
   thumbnailUrl?: string;
@@ -251,6 +426,7 @@ export interface Order {
   customerName: string;
   customerPhone: string;
   customerEmail?: string;
+  idempotencyKey?: string;
   status: OrderStatus;
   paymentStatus: PaymentStatus;
   paymentMethod: 'Pay at Shop';
@@ -258,6 +434,14 @@ export interface Order {
   discount: number;
   totalAmount: number;
   couponCode?: string;
+  giftCode?: string;
+  giftCodeDiscount?: number;
+  giftCodeId?: string;
+  netPayableAtCounter?: number;
+  amountDue?: number;
+  amountReceived?: number;
+  paymentRecordedAt?: string;
+  paymentRecordedBy?: string;
   pickupMode: 'FLEXIBLE' | 'SLOT';
   pickupSlotDate?: string;
   pickupSlotTime?: string;
@@ -266,6 +450,7 @@ export interface Order {
   qrToken: string;
   items: OrderItem[];
   statusHistory: OrderStatusHistoryItem[];
+  reservationExpiresAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -303,6 +488,7 @@ export interface RefundRecord {
   notes?: string;
   recordedBy: string;
   staffName?: string;
+  idempotencyKey?: string;
   createdAt: string;
 }
 

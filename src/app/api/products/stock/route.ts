@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adjustInventory } from '@/lib/db/store-service';
 import { normalizeProductInventory } from '@/lib/inventory/normalizer';
+import { enforceStaffRole } from '@/lib/auth/server-guard';
 
 export async function POST(request: NextRequest) {
-  try {
-    const actorRole = request.headers.get('x-user-role') || 'staff';
-    if (actorRole === 'customer') {
-      return NextResponse.json(
-        { error: 'Unauthorized: Customers cannot mutate inventory' },
-        { status: 403 }
-      );
-    }
+  // Only Owner and Store Manager can directly mutate stock levels
+  const auth = enforceStaffRole(request, ['owner', 'store_manager']);
+  if ('errorResponse' in auth) {
+    return auth.errorResponse;
+  }
 
+  try {
     const body = await request.json();
     const { productId, variantId, quantityChange, reason, notes } = body;
 
@@ -26,7 +25,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const actorId = request.headers.get('x-user-id') || 'staff-session';
+    const actorId = auth.session.staffId;
 
     const result = await adjustInventory(
       productId,
@@ -41,13 +40,11 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      product: result.product,
+      product: normalized,
       movement: result.movement,
-      normalized,
-      message: `Stock successfully adjusted for "${result.product.name}". New Total Stock: ${normalized.totalStock} (Available: ${normalized.availableStock})`,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Stock adjustment failed';
+    const message = err instanceof Error ? err.message : 'Failed to adjust stock';
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

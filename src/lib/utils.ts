@@ -28,33 +28,26 @@ export function formatDate(dateString: string): string {
   }
 }
 
+export { getShopDirectionsUrl } from '@/lib/location/directions';
+export { getStoreLiveStatus, formatTime12h, type ShopOpenStatus } from '@/lib/location/shop-status';
+import { getStoreLiveStatus } from '@/lib/location/shop-status';
+
 /**
  * Calculates whether the physical store is currently OPEN or CLOSED
- * based on live system time and configured shop hours.
+ * based on live system time in Asia/Kolkata and configured shop hours.
  */
 export function isStoreCurrentlyOpen(
-  openingTime: string = '09:30',
+  openingTime: string = '07:30',
   closingTime: string = '21:30',
   weeklyClosedDays: string[] = ['Sunday']
 ): { isOpen: boolean; message: string } {
-  const now = new Date();
-  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const currentDay = dayNames[now.getDay()];
-
-  if (weeklyClosedDays.includes(currentDay)) {
-    return { isOpen: false, message: `Closed today (${currentDay})` };
-  }
-
-  const [openHour, openMin] = openingTime.split(':').map(Number);
-  const [closeHour, closeMin] = closingTime.split(':').map(Number);
-
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const openMinutes = openHour * 60 + openMin;
-  const closeMinutes = closeHour * 60 + closeMin;
-
-  if (currentMinutes >= openMinutes && currentMinutes < closeMinutes) {
-    return { isOpen: true, message: `Open now until ${closingTime}` };
-  }
-
-  return { isOpen: false, message: `Closed now (Opens at ${openingTime})` };
+  const status = getStoreLiveStatus({
+    openingTime,
+    closingTime,
+    weeklyClosedDays,
+  });
+  return {
+    isOpen: status.isOpen,
+    message: status.fullStatus,
+  };
 }
