@@ -10,6 +10,7 @@ import { matchTokenFuzzy, stringSimilarity } from './fuzzy-matcher';
 import { SUGGESTED_SEARCH_ALTERNATIVES } from './alias-dictionary';
 import { buildProductSearchIndex } from './product-indexer';
 import { searchAnalytics } from './search-analytics';
+import { INITIAL_CATEGORIES } from '@/lib/db/initial-data';
 
 export interface SearchOptions {
   query?: string;
@@ -75,11 +76,34 @@ export function searchCatalogue(
 
   // 1. Category Slug filter (if explicitly passed in options)
   if (options.categorySlug) {
-    pool = pool.filter(
-      (p) =>
-        p.categoryName?.toLowerCase().includes(options.categorySlug!.toLowerCase()) ||
-        p.categoryId === options.categorySlug
+    const targetSlug = options.categorySlug.toLowerCase().trim();
+    const matchedCategory = INITIAL_CATEGORIES.find(
+      (c) =>
+        c.slug.toLowerCase() === targetSlug ||
+        c.id.toLowerCase() === targetSlug ||
+        c.name.toLowerCase() === targetSlug
     );
+
+    pool = pool.filter((p) => {
+      // Direct categorySlug match
+      if (p.categorySlug && p.categorySlug.toLowerCase() === targetSlug) {
+        return true;
+      }
+      // Direct categoryId match against target or matched category ID
+      if (p.categoryId) {
+        if (p.categoryId.toLowerCase() === targetSlug) return true;
+        if (matchedCategory && p.categoryId.toLowerCase() === matchedCategory.id.toLowerCase()) return true;
+      }
+      // Match against categoryName or slugified categoryName
+      if (p.categoryName) {
+        const catNameLower = p.categoryName.toLowerCase().trim();
+        if (matchedCategory && catNameLower === matchedCategory.name.toLowerCase()) return true;
+        if (catNameLower === targetSlug) return true;
+        const slugified = catNameLower.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        if (slugified === targetSlug) return true;
+      }
+      return false;
+    });
   }
 
   // 2. Process query intent if provided

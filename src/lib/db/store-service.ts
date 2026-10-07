@@ -81,6 +81,13 @@ function mapRowToProduct(row: any): Product {
   const isArchived = !row.is_active || row.status === 'archived';
   const status = isArchived ? 'archived' : (row.status || (row.is_active ? 'published' : 'hidden'));
 
+  const categoryId = row.category_id || row.categoryId || '';
+  const categoryName = row.categoryName || row.categories?.name || 'General';
+  const matchedCat = INITIAL_CATEGORIES.find(
+    (c) => c.id === categoryId || c.name.toLowerCase() === categoryName.toLowerCase()
+  );
+  const categorySlug = row.categorySlug || row.categories?.slug || matchedCat?.slug || undefined;
+
   const prod: Product = {
     id: row.id,
     name: row.name,
@@ -88,8 +95,9 @@ function mapRowToProduct(row: any): Product {
     barcodeValue: row.barcode_value || row.sku,
     manufacturerModelNumber: row.manufacturer_model_number || undefined,
     slug: row.slug,
-    categoryId: row.category_id,
-    categoryName: row.categoryName || row.categories?.name || 'General',
+    categoryId,
+    categoryName,
+    categorySlug,
     description: row.description || '',
     shortDescription: row.short_description || undefined,
     price,
@@ -525,11 +533,20 @@ export async function getCustomerProducts(params: ProductFilterParams = {}): Pro
 
   if (shouldUseSupabase()) {
     const supabase = getSupabaseAdminClient();
-    const { data: rows, error } = await supabase
+    let query = supabase
       .from('products')
-      .select('*, categories(name)')
+      .select('*, categories(id, name, slug)')
       .eq('is_active', true)
       .order('created_at', { ascending: false });
+
+    if (params.categorySlug) {
+      const cat = await getCategoryBySlug(params.categorySlug);
+      if (cat) {
+        query = query.eq('category_id', cat.id);
+      }
+    }
+
+    const { data: rows, error } = await query;
 
     if (error) {
       if (error.code === 'PGRST205') {
@@ -575,7 +592,7 @@ export async function getProductBySlug(slug: string): Promise<CustomerProductVie
     const supabase = getSupabaseAdminClient();
     const { data: row, error } = await supabase
       .from('products')
-      .select('*, categories(name)')
+      .select('*, categories(id, name, slug)')
       .eq('slug', slug)
       .eq('is_active', true)
       .maybeSingle();
@@ -667,7 +684,7 @@ export async function getAdminProducts(filter?: {
     const supabase = getSupabaseAdminClient();
     let query = supabase
       .from('products')
-      .select('*, categories(name)')
+      .select('*, categories(id, name, slug)')
       .order('created_at', { ascending: false });
 
     if (filter?.status === 'active') {
@@ -838,7 +855,7 @@ export async function createAdminProduct(
     const { data: inserted, error: insertErr } = await supabase
       .from('products')
       .insert(rowToInsert)
-      .select('*, categories(name)')
+      .select('*, categories(id, name, slug)')
       .single();
 
     if (insertErr) {
@@ -952,6 +969,7 @@ export async function createAdminProduct(
     slug: data.slug || data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
     categoryId: data.categoryId || 'b0000000-0000-0000-0000-000000000001',
     categoryName: data.categoryName || 'General',
+    categorySlug: data.categorySlug || INITIAL_CATEGORIES.find((c) => c.id === data.categoryId || c.name === data.categoryName)?.slug,
     description: data.description || '',
     price: pricing.sellingPrice,
     mrp: pricing.mrp,
