@@ -6,6 +6,9 @@ import {
 } from '@/lib/db/store-service';
 import { enforceStaffRole } from '@/lib/auth/server-guard';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -23,10 +26,17 @@ export async function GET(request: NextRequest) {
         status: status || undefined,
         search,
       });
-      return NextResponse.json({
-        products,
-        total: products.length,
-      });
+      return NextResponse.json(
+        {
+          products,
+          total: products.length,
+        },
+        {
+          headers: {
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+          },
+        }
+      );
     }
 
     const categorySlug = searchParams.get('category') || undefined;
@@ -49,7 +59,11 @@ export async function GET(request: NextRequest) {
       sort,
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json(result, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      },
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to fetch products';
     return NextResponse.json({ error: message }, { status: 500 });

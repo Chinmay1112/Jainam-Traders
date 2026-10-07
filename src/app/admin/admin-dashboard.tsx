@@ -76,6 +76,9 @@ import AdminCustomersView from '@/components/admin/admin-customers-view';
 import AdminGiftCodesView from '@/components/admin/admin-gift-codes-view';
 import { ProductSuggestionBox } from '@/components/admin/product-suggestion-box';
 import { DuplicateAuditModal } from '@/components/admin/duplicate-audit-modal';
+import { AdminSystemHealth } from '@/components/admin/admin-system-health';
+import { AdminAssistCustomer } from '@/components/admin/admin-assist-customer';
+import { HeartPulse, UserCheck } from 'lucide-react';
 
 interface AdminDashboardProps {
   initialStaff?: StaffSession;
@@ -90,7 +93,7 @@ export default function AdminDashboard({ initialStaff }: AdminDashboardProps = {
 
   const defaultTab = staffRole === 'staff' ? 'orders' : 'overview';
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'orders' | 'inventory' | 'products' | 'reviews' | 'settings' | 'audit' | 'customers' | 'gift-codes'
+    'overview' | 'orders' | 'inventory' | 'products' | 'reviews' | 'settings' | 'audit' | 'customers' | 'gift-codes' | 'health' | 'assist'
   >(defaultTab);
 
   const handleSignOut = async () => {
@@ -266,13 +269,13 @@ export default function AdminDashboard({ initialStaff }: AdminDashboardProps = {
     setLoading(true);
     try {
       const [ordRes, prodRes, setRes, revRes, retRes, refRes, catRes] = await Promise.all([
-        fetch('/api/orders').then((r) => r.json()),
-        fetch('/api/products?admin=true').then((r) => r.json()),
-        fetch('/api/settings').then((r) => r.json()),
-        fetch('/api/reviews?admin=true').then((r) => r.json()),
-        fetch('/api/returns').then((r) => r.json()),
-        fetch('/api/refunds').then((r) => r.json()),
-        fetch('/api/categories').then((r) => r.json()).catch(() => ({ categories: [] })),
+        fetch('/api/orders', { cache: 'no-store' }).then((r) => r.json()),
+        fetch('/api/products?admin=true', { cache: 'no-store' }).then((r) => r.json()),
+        fetch('/api/settings', { cache: 'no-store' }).then((r) => r.json()),
+        fetch('/api/reviews?admin=true', { cache: 'no-store' }).then((r) => r.json()),
+        fetch('/api/returns', { cache: 'no-store' }).then((r) => r.json()),
+        fetch('/api/refunds', { cache: 'no-store' }).then((r) => r.json()),
+        fetch('/api/categories', { cache: 'no-store' }).then((r) => r.json()).catch(() => ({ categories: [] })),
       ]);
 
       const loadedOrders = ordRes.orders || [];
@@ -609,7 +612,7 @@ export default function AdminDashboard({ initialStaff }: AdminDashboardProps = {
 
       const priceChanged = editingProduct.price !== Number(editPrice) || editingProduct.mrp !== Number(editMrp);
       setIsEditProductModalOpen(false);
-      refreshData();
+      await refreshData();
 
       if (priceChanged && data.product) {
         setBannerNotice(`Price updated for "${editName}"! SKU barcode identity (${data.product.sku}) preserved. Ready to reprint 60x24mm labels.`);
@@ -714,7 +717,7 @@ export default function AdminDashboard({ initialStaff }: AdminDashboardProps = {
       setNewProdSearchKeywords('');
       setNewProdPhotos([]);
       setNewProdVideo(undefined);
-      refreshData();
+      await refreshData();
     } catch (err: unknown) {
       setAddProductError(err instanceof Error ? err.message : 'Error creating product');
     } finally {
@@ -743,7 +746,7 @@ export default function AdminDashboard({ initialStaff }: AdminDashboardProps = {
 
       setBannerNotice(data.message || `Product ${action}d successfully`);
       setIsArchiveModalOpen(false);
-      refreshData();
+      await refreshData();
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : 'Failed to archive product');
     } finally {
@@ -1008,6 +1011,26 @@ export default function AdminDashboard({ initialStaff }: AdminDashboardProps = {
               }`}
             >
               <Settings className="w-4 h-4" /> Shop Settings
+            </button>
+          )}
+
+          <button
+            onClick={() => setActiveTab('assist')}
+            className={`px-4 py-2 rounded-xl flex items-center gap-2 transition-all shrink-0 ${
+              activeTab === 'assist' ? 'bg-brand-500 text-stone-950 shadow-sm' : 'text-stone-400 hover:text-white'
+            }`}
+          >
+            <UserCheck className="w-4 h-4" /> Assist Customer
+          </button>
+
+          {(staffRole === 'owner' || staffRole === 'store_manager') && (
+            <button
+              onClick={() => setActiveTab('health')}
+              className={`px-4 py-2 rounded-xl flex items-center gap-2 transition-all shrink-0 ${
+                activeTab === 'health' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-400 hover:text-white'
+              }`}
+            >
+              <HeartPulse className="w-4 h-4 text-emerald-600" /> System Health
             </button>
           )}
         </div>
@@ -2457,6 +2480,22 @@ export default function AdminDashboard({ initialStaff }: AdminDashboardProps = {
       {/* TAB: GIFT CODES */}
       {activeTab === 'gift-codes' && (staffRole === 'owner' || staffRole === 'store_manager') && (
         <AdminGiftCodesView staffRole={staffRole} staffName={staffName} />
+      )}
+
+      {/* TAB: SYSTEM HEALTH & DIAGNOSTICS (Phase 23 & 24) */}
+      {activeTab === 'health' && (staffRole === 'owner' || staffRole === 'store_manager') && (
+        <AdminSystemHealth staffRole={staffRole} />
+      )}
+
+      {/* TAB: ASSIST CUSTOMER (Phase 25) */}
+      {activeTab === 'assist' && (
+        <AdminAssistCustomer
+          products={products}
+          currentStaff={initialStaff}
+          onOrderCreated={() => {
+            refreshData();
+          }}
+        />
       )}
 
       {/* ============================================================== */}

@@ -8,6 +8,9 @@ import {
 } from '@/lib/db/store-service';
 import { enforceStaffRole, getAuthenticatedStaffFromRequest } from '@/lib/auth/server-guard';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -23,10 +26,18 @@ export async function GET(
     // If not authenticated staff, strip internal warehouse stock numbers
     if (!staffSession) {
       const { stockQuantity: _, reservedStock: __, lowStockThreshold: ___, ...customerSafe } = product;
-      return NextResponse.json({ product: customerSafe });
+      return NextResponse.json({ product: customerSafe }, {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        },
+      });
     }
 
-    return NextResponse.json({ product });
+    return NextResponse.json({ product }, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      },
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to fetch product';
     return NextResponse.json({ error: message }, { status: 500 });

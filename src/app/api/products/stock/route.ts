@@ -3,6 +3,9 @@ import { adjustInventory } from '@/lib/db/store-service';
 import { normalizeProductInventory } from '@/lib/inventory/normalizer';
 import { enforceStaffRole } from '@/lib/auth/server-guard';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function POST(request: NextRequest) {
   // Only Owner and Store Manager can directly mutate stock levels
   const auth = enforceStaffRole(request, ['owner', 'store_manager']);

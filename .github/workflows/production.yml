@@ -1,0 +1,111 @@
+name: Production CI/CD & Supabase Migration Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  # ============================================================================
+  # JOB 1: CODE QUALITY & TEST SUITE
+  # ============================================================================
+  quality-gate:
+    name: Automated Verification & Production Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Test Suite (Vitest)
+        run: npm test
+
+      - name: TypeScript Typecheck
+        run: npx tsc --noEmit
+
+      - name: Code Linting
+        run: npm run lint
+
+      - name: Next.js Production Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL || 'https://jainam-traders-karahi.vercel.app' }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  # ============================================================================
+  # JOB 2: DESTRUCTIVE MIGRATION AUDIT & AUTOMATED SUPABASE DB PUSH
+  # ============================================================================
+  database-pipeline:
+    name: Supabase Migration Audit & Deployment
+    needs: quality-gate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # Phase 9: Safety audit against destructive schema changes
+      - name: Destructive Migration Safety Guard
+        run: |
+          echo "Auditing supabase/migrations/ for destructive keywords..."
+          DESTRUCTIVE_PATTERN='(?i)\b(DROP\s+TABLE|DROP\s+COLUMN|TRUNCATE)\b'
+
+          VIOLATIONS=$(grep -rEi --exclude-dir='.git' "$DESTRUCTIVE_PATTERN" supabase/migrations/ || true)
+
+          if [ -n "$VIOLATIONS" ]; then
+            echo "❌ [SAFETY VIOLATION] Destructive SQL command detected in migrations:"
+            echo "$VIOLATIONS"
+            echo "Automated migration stopped to protect live customer and business data."
+            echo "Destructive migrations require manual review and an explicit maintenance window."
+            exit 1
+          fi
+          echo "✅ Destructive check passed: No DROP TABLE, DROP COLUMN, or TRUNCATE commands found."
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link Production Supabase Project
+        run: |
+          supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_REF || 'ouwuzekubmagkmioqqdh' }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Supabase DB Push (Dry Run Validation)
+        run: |
+          supabase db push --dry-run
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+      - name: Apply Database Migrations (Automated Deploy)
+        run: |
+          supabase db push
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+      - name: Post-Deployment Schema Verification
+        run: |
+          echo "Verifying live database endpoints and table availability..."
+          curl -f -s -H "apikey: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+            "${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/products?select=count" > /dev/null
+          echo "✅ Database schema verified accessible after migration."

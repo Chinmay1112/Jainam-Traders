@@ -55,6 +55,152 @@ import {
 } from '@/lib/barcode/barcode-service';
 import { hashGiftCode, normalizeGiftCode } from '@/lib/gift-codes/gift-code-service';
 import { findSimilarProducts } from '@/lib/products/duplicate-detector';
+import { getSupabaseAdminClient, isSupabaseConfigured } from '@/lib/supabase/server';
+
+function isUuid(val: unknown): boolean {
+  return typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+}
+
+export function shouldUseSupabase(): boolean {
+  if (process.env.NODE_ENV === 'test') {
+    return false;
+  }
+  if (process.env.NODE_ENV === 'production') {
+    return true;
+  }
+  return isSupabaseConfigured();
+}
+
+function mapRowToProduct(row: any): Product {
+  const mrp = Number(row.mrp);
+  const price = Number(row.price);
+  const discountPercentage = row.discount_percentage !== undefined && row.discount_percentage !== null
+    ? Number(row.discount_percentage)
+    : calculateDiscountPercentage(mrp, price);
+
+  const isArchived = !row.is_active || row.status === 'archived';
+  const status = isArchived ? 'archived' : (row.status || (row.is_active ? 'published' : 'hidden'));
+
+  const prod: Product = {
+    id: row.id,
+    name: row.name,
+    sku: row.sku,
+    barcodeValue: row.barcode_value || row.sku,
+    manufacturerModelNumber: row.manufacturer_model_number || undefined,
+    slug: row.slug,
+    categoryId: row.category_id,
+    categoryName: row.categoryName || row.categories?.name || 'General',
+    description: row.description || '',
+    shortDescription: row.short_description || undefined,
+    price,
+    mrp,
+    discountPercentage,
+    stockQuantity: Number(row.stock_quantity ?? 0),
+    reservedStock: Number(row.reserved_stock ?? 0),
+    lowStockThreshold: Number(row.low_stock_threshold ?? 3),
+    minOrderQuantity: Number(row.min_order_quantity ?? 1),
+    maxOrderQuantity: Number(row.max_order_quantity ?? 10),
+    tags: Array.isArray(row.tags) ? row.tags : [],
+    brand: row.brand || 'Jainam Traders',
+    dimensions: row.dimensions || undefined,
+    weight: row.weight || undefined,
+    material: row.material || undefined,
+    colour: row.colour || undefined,
+    size: row.size || undefined,
+    occasion: row.occasion || undefined,
+    isFeatured: Boolean(row.is_featured),
+    isNewArrival: Boolean(row.is_new_arrival),
+    isBestSeller: Boolean(row.is_best_seller),
+    status,
+    isArchived,
+    isActive: Boolean(row.is_active),
+    thumbnailUrl: row.thumbnail_url || '/images/product-placeholder.svg',
+    images: Array.isArray(row.images) && row.images.length > 0 ? row.images : [row.thumbnail_url || '/images/product-placeholder.svg'],
+    videoUrl: row.video_url || undefined,
+    createdAt: row.created_at || new Date().toISOString(),
+    updatedAt: row.updated_at || new Date().toISOString(),
+  };
+
+  prod.searchIndex = buildProductSearchIndex(prod);
+  return prod;
+}
+
+function mapRowToShopSettings(row: any): ShopSettings {
+  return {
+    id: row.id,
+    shopName: row.shop_name || 'Jainam Traders',
+    shopTagline: row.shop_tagline || 'GIFTS • TOYS • ACCESSORIES • MORE',
+    shopLogoUrl: row.shop_logo_url || '/images/jainam-logo.svg',
+    shopAddress: row.shop_address || 'Jainam Traders (Location on Google Maps)',
+    googleMapsUrl: row.google_maps_url || 'https://maps.app.goo.gl/8ZJCWbBVtrHep7UcA',
+    latitude: row.latitude !== null && row.latitude !== undefined ? Number(row.latitude) : 22.2765869,
+    longitude: row.longitude !== null && row.longitude !== undefined ? Number(row.longitude) : 75.7979897,
+    phone: row.phone || '',
+    whatsappNumber: row.whatsapp_number || '',
+    email: row.email || 'contact@jainamtraders.com',
+    openingTime: row.opening_time ? row.opening_time.slice(0, 5) : '07:30',
+    closingTime: row.closing_time ? row.closing_time.slice(0, 5) : '21:30',
+    weeklyClosedDays: row.weekly_closed_days || ['Sunday'],
+    holidayDates: row.holiday_dates || [],
+    shopDescription: row.shop_description || '',
+    pickupInstructions: row.pickup_instructions || '',
+    isModeBSlotsEnabled: row.is_mode_b_slots_enabled ?? true,
+    maxOrdersPerSlot: row.max_orders_per_slot || 10,
+    socialFacebook: row.social_facebook || undefined,
+    socialInstagram: row.social_instagram || undefined,
+    updatedAt: row.updated_at || new Date().toISOString(),
+  };
+}
+
+function mapRowToOrder(row: any, itemsRow?: any[]): Order {
+  const items: OrderItem[] = (itemsRow || []).map((it) => ({
+    id: it.id,
+    orderId: it.order_id,
+    productId: it.product_id,
+    variantId: it.variant_id || undefined,
+    productName: it.product_name,
+    variantName: it.variant_title || undefined,
+    unitPrice: Number(it.price),
+    mrp: Number(it.mrp),
+    discountPercentage: calculateDiscountPercentage(Number(it.mrp), Number(it.price)),
+    quantity: Number(it.quantity),
+    totalPrice: Number(it.subtotal),
+    thumbnailUrl: it.thumbnail_url || '/images/product-placeholder.svg',
+  }));
+
+  return {
+    id: row.id,
+    orderNumber: row.order_number,
+    idempotencyKey: row.idempotency_key || undefined,
+    customerId: row.customer_id || '',
+    customerName: row.customer_name,
+    customerPhone: row.customer_phone,
+    customerEmail: row.customer_email || undefined,
+    status: row.status,
+    paymentStatus: row.payment_status,
+    paymentMethod: row.payment_method || 'Pay at Shop',
+    subtotal: Number(row.subtotal),
+    discount: Number(row.discount_amount || 0),
+    totalAmount: Number(row.total_amount),
+    amountDue: row.payment_status === 'PAID' ? 0 : Number(row.total_amount),
+    amountReceived: row.payment_status === 'PAID' ? Number(row.total_amount) : 0,
+    couponCode: row.coupon_code || undefined,
+    giftCode: row.gift_code || undefined,
+    giftCodeDiscount: Number(row.gift_code_discount || 0),
+    netPayableAtCounter: Number(row.total_amount),
+    pickupMode: row.pickup_mode || 'FLEXIBLE',
+    pickupSlotDate: row.pickup_slot_date || undefined,
+    pickupSlotTime: row.pickup_slot_time || undefined,
+    customerNotes: row.customer_notes || undefined,
+    adminNotes: row.admin_notes || undefined,
+    qrToken: row.qr_token || `JT-QR-${row.order_number}`,
+    reservationExpiresAt: row.expires_at || undefined,
+    items,
+    statusHistory: Array.isArray(row.status_history) ? row.status_history : [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
 // Global in-memory storage for high-concurrency local development & automated test execution
 class StoreDataStore {
@@ -171,6 +317,24 @@ export function seedTestFixtures(fixtures?: {
  * 1. SHOP SETTINGS
  */
 export async function getShopSettings(): Promise<ShopSettings> {
+  if (shouldUseSupabase()) {
+    try {
+      const supabase = getSupabaseAdminClient();
+      const { data, error } = await supabase
+        .from('shop_settings')
+        .select('*')
+        .limit(1)
+        .maybeSingle();
+
+      if (data && !error) {
+        return mapRowToShopSettings(data);
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[Supabase DB Error] getShopSettings failed:', e);
+      }
+    }
+  }
   return storeDb.settings;
 }
 
@@ -178,23 +342,135 @@ export async function updateShopSettings(
   updates: Partial<ShopSettings>,
   actorId?: string
 ): Promise<ShopSettings> {
-  storeDb.settings = {
+  const newSettings = {
     ...storeDb.settings,
     ...updates,
     updatedAt: new Date().toISOString(),
   };
-  storeDb.logAudit(actorId, 'admin', 'UPDATE_SHOP_SETTINGS', 'shop_settings', storeDb.settings.id, updates);
-  return storeDb.settings;
+  storeDb.settings = newSettings;
+
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    const rowUpdates: Record<string, any> = {
+      updated_at: newSettings.updatedAt,
+    };
+    if (updates.shopName !== undefined) rowUpdates.shop_name = updates.shopName;
+    if (updates.shopTagline !== undefined) rowUpdates.shop_tagline = updates.shopTagline;
+    if (updates.shopAddress !== undefined) rowUpdates.shop_address = updates.shopAddress;
+    if (updates.googleMapsUrl !== undefined) rowUpdates.google_maps_url = updates.googleMapsUrl;
+    if (updates.latitude !== undefined) rowUpdates.latitude = updates.latitude;
+    if (updates.longitude !== undefined) rowUpdates.longitude = updates.longitude;
+    if (updates.phone !== undefined) rowUpdates.phone = updates.phone;
+    if (updates.whatsappNumber !== undefined) rowUpdates.whatsapp_number = updates.whatsappNumber;
+    if (updates.email !== undefined) rowUpdates.email = updates.email;
+    if (updates.openingTime !== undefined) rowUpdates.opening_time = updates.openingTime;
+    if (updates.closingTime !== undefined) rowUpdates.closing_time = updates.closingTime;
+    if (updates.weeklyClosedDays !== undefined) rowUpdates.weekly_closed_days = updates.weeklyClosedDays;
+    if (updates.shopDescription !== undefined) rowUpdates.shop_description = updates.shopDescription;
+    if (updates.pickupInstructions !== undefined) rowUpdates.pickup_instructions = updates.pickupInstructions;
+
+    const { error: upsertErr } = await supabase
+      .from('shop_settings')
+      .upsert({
+        id: isUuid(newSettings.id) ? newSettings.id : 'a0000000-0000-0000-0000-000000000001',
+        ...rowUpdates,
+      });
+
+    if (upsertErr) {
+      console.error('[Supabase DB Error] updateShopSettings failed:', upsertErr);
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error(`Database failed to update shop settings: ${upsertErr.message}`);
+      }
+    }
+  }
+
+  storeDb.logAudit(actorId, 'admin', 'UPDATE_SHOP_SETTINGS', 'shop_settings', newSettings.id, updates);
+  return newSettings;
 }
 
 /**
  * 2. CATEGORIES
  */
 export async function getCategories(): Promise<Category[]> {
+  if (shouldUseSupabase()) {
+    try {
+      const supabase = getSupabaseAdminClient();
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true });
+
+      if (!error && data && data.length > 0) {
+        return data.map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          slug: c.slug,
+          description: c.description || undefined,
+          icon: c.icon || undefined,
+          imageUrl: c.image_url || undefined,
+          sortOrder: c.sort_order,
+          isFeatured: c.is_featured,
+          isActive: c.is_active,
+          createdAt: c.created_at,
+        }));
+      }
+
+      // Auto-populate canonical categories if table is empty to guarantee foreign key integrity
+      if (!error && (!data || data.length === 0)) {
+        const toInsert = INITIAL_CATEGORIES.map((c) => ({
+          id: c.id,
+          name: c.name,
+          slug: c.slug,
+          description: c.description,
+          icon: c.icon,
+          sort_order: c.sortOrder,
+          is_featured: c.isFeatured,
+          is_active: c.isActive,
+        }));
+        await supabase.from('categories').upsert(toInsert, { onConflict: 'slug' });
+        return INITIAL_CATEGORIES;
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[Supabase DB Error] getCategories failed:', e);
+      }
+    }
+  }
   return storeDb.categories.filter((c) => c.isActive).sort((a, b) => a.sortOrder - b.sortOrder);
 }
 
 export async function getCategoryBySlug(slug: string): Promise<Category | null> {
+  if (shouldUseSupabase()) {
+    try {
+      const supabase = getSupabaseAdminClient();
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('slug', slug)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (!error && data) {
+        return {
+          id: data.id,
+          name: data.name,
+          slug: data.slug,
+          description: data.description || undefined,
+          icon: data.icon || undefined,
+          imageUrl: data.image_url || undefined,
+          sortOrder: data.sort_order,
+          isFeatured: data.is_featured,
+          isActive: data.is_active,
+          createdAt: data.created_at,
+        };
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[Supabase DB Error] getCategoryBySlug failed:', e);
+      }
+    }
+  }
   return storeDb.categories.find((c) => c.slug === slug && c.isActive) || null;
 }
 
@@ -245,7 +521,32 @@ export async function getCustomerProducts(params: ProductFilterParams = {}): Pro
   total: number;
   suggestedAlternatives?: { label: string; query: string; categorySlug: string }[];
 }> {
-  const result = searchCatalogue(storeDb.products, {
+  let catalogueProducts: Product[] = [];
+
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    const { data: rows, error } = await supabase
+      .from('products')
+      .select('*, categories(name)')
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      if (error.code === 'PGRST205') {
+        console.warn('[Supabase DB Warning] Table "products" does not exist yet in schema cache. Returning 0 products until migrations are applied.');
+        catalogueProducts = [];
+      } else {
+        console.error('[Supabase DB Error] getCustomerProducts failed:', error);
+        throw new Error(`Database failed to fetch products: ${error.message}`);
+      }
+    } else {
+      catalogueProducts = (rows || []).map(mapRowToProduct);
+    }
+  } else {
+    catalogueProducts = storeDb.products;
+  }
+
+  const result = searchCatalogue(catalogueProducts, {
     query: params.query,
     categorySlug: params.categorySlug,
     minPrice: params.minPrice,
@@ -270,6 +571,25 @@ export async function getCustomerProducts(params: ProductFilterParams = {}): Pro
 
 
 export async function getProductBySlug(slug: string): Promise<CustomerProductView | null> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    const { data: row, error } = await supabase
+      .from('products')
+      .select('*, categories(name)')
+      .eq('slug', slug)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (error) {
+      if (error.code === 'PGRST205') return null;
+      console.error('[Supabase DB Error] getProductBySlug failed:', error);
+      throw new Error(`Database failed to fetch product: ${error.message}`);
+    }
+
+    if (!row) return null;
+    return toCustomerProductView(mapRowToProduct(row));
+  }
+
   const p = storeDb.products.find(
     (prod) =>
       prod.slug === slug &&
@@ -284,12 +604,49 @@ export async function getProductBySlug(slug: string): Promise<CustomerProductVie
 }
 
 export async function getRawProductById(id: string): Promise<Product | null> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    const { data: row, error } = await supabase
+      .from('products')
+      .select('*, categories(name)')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      if (error.code === 'PGRST205') return null;
+      console.error('[Supabase DB Error] getRawProductById failed:', error);
+      throw new Error(`Database failed to fetch product: ${error.message}`);
+    }
+
+    if (!row) return null;
+    return mapRowToProduct(row);
+  }
+
   return storeDb.products.find((prod) => prod.id === id) || null;
 }
 
 export async function getProductByBarcode(code: string): Promise<Product | null> {
   const norm = normalizeBarcodeValue(code);
   if (!norm) return null;
+
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    const { data: rows, error } = await supabase
+      .from('products')
+      .select('*, categories(name)')
+      .or(`sku.ilike.${norm},barcode_value.ilike.${norm}`)
+      .limit(1);
+
+    if (error) {
+      if (error.code === 'PGRST205') return null;
+      console.error('[Supabase DB Error] getProductByBarcode failed:', error);
+      throw new Error(`Database failed to query barcode: ${error.message}`);
+    }
+
+    if (!rows || rows.length === 0) return null;
+    return mapRowToProduct(rows[0]);
+  }
+
   return (
     storeDb.products.find(
       (prod) =>
@@ -306,6 +663,45 @@ export async function getAdminProducts(filter?: {
   status?: 'all' | 'active' | 'archived';
   search?: string;
 }): Promise<Product[]> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    let query = supabase
+      .from('products')
+      .select('*, categories(name)')
+      .order('created_at', { ascending: false });
+
+    if (filter?.status === 'active') {
+      query = query.eq('is_active', true);
+    } else if (filter?.status === 'archived') {
+      query = query.eq('is_active', false);
+    }
+
+    const { data: rows, error } = await query;
+    if (error) {
+      if (error.code === 'PGRST205') {
+        console.warn('[Supabase DB Warning] Table "products" does not exist yet. Returning 0 products.');
+        return [];
+      }
+      console.error('[Supabase DB Error] getAdminProducts failed:', error);
+      throw new Error(`Database failed to fetch products: ${error.message}`);
+    }
+
+    let list = (rows || []).map(mapRowToProduct);
+
+    if (filter?.search && filter.search.trim()) {
+      const q = filter.search.toLowerCase().trim();
+      list = list.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          p.sku.toLowerCase().includes(q) ||
+          p.brand.toLowerCase().includes(q) ||
+          (p.categoryName && p.categoryName.toLowerCase().includes(q))
+      );
+    }
+
+    return list;
+  }
+
   let list = storeDb.products.map((p) => {
     const inv = normalizeProductInventory(p);
     return {
@@ -350,7 +746,159 @@ export async function createAdminProduct(
 ): Promise<Product> {
   if (!data.name || !data.name.trim()) throw new Error('Product name is required');
 
-  // If SKU is missing or empty, generate a unique Jainam Traders SKU automatically
+  const pricing = validateProductPricing(data.mrp, data.price);
+  if (!pricing.isValid) {
+    throw new Error(pricing.error || 'Invalid product pricing');
+  }
+
+  const initialStock = normalizeStockNumber(data.stockQuantity, 0);
+  const lowStockThreshold = normalizeStockNumber(data.lowStockThreshold, 3);
+  const status = data.status || 'published';
+  const isArchived = status === 'archived' || Boolean(data.isArchived);
+  const isActive = isArchived ? false : data.isActive !== undefined ? data.isActive : true;
+
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+
+    const rawSku = data.sku && data.sku.trim()
+      ? data.sku.trim()
+      : generateUniqueProductSku(storeDb.products, data.categoryName);
+    const normalizedSku = normalizeBarcodeValue(rawSku);
+    const rawBarcode = data.barcodeValue ? normalizeBarcodeValue(data.barcodeValue) : normalizedSku;
+
+    // Check SKU uniqueness in Supabase
+    const { data: skuClash, error: skuErr } = await supabase
+      .from('products')
+      .select('id, name, sku')
+      .ilike('sku', normalizedSku)
+      .limit(1);
+
+    if (skuErr) {
+      console.error('[Supabase DB Error] SKU check failed:', skuErr);
+      throw new Error(`Database error during SKU check: ${skuErr.message}`);
+    }
+    if (skuClash && skuClash.length > 0) {
+      throw new Error(`Duplicate SKU rejected: SKU "${normalizedSku}" already exists for product "${skuClash[0].name}".`);
+    }
+
+    // Check Barcode uniqueness in Supabase
+    if (rawBarcode) {
+      const { data: bcClash, error: bcErr } = await supabase
+        .from('products')
+        .select('id, name, barcode_value')
+        .ilike('barcode_value', rawBarcode)
+        .limit(1);
+
+      if (bcErr) {
+        console.error('[Supabase DB Error] Barcode check failed:', bcErr);
+        throw new Error(`Database error during barcode check: ${bcErr.message}`);
+      }
+      if (bcClash && bcClash.length > 0) {
+        throw new Error(`Duplicate barcode rejected: Barcode "${rawBarcode}" already exists for product "${bcClash[0].name}".`);
+      }
+    }
+
+    const productId = isUuid(data.id) ? (data.id as string) : crypto.randomUUID();
+    const slug = data.slug || data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+    const rowToInsert = {
+      id: productId,
+      name: data.name.trim(),
+      sku: normalizedSku,
+      barcode_value: rawBarcode,
+      manufacturer_model_number: data.manufacturerModelNumber?.trim() || null,
+      slug,
+      category_id: data.categoryId && isUuid(data.categoryId) ? data.categoryId : 'b0000000-0000-0000-0000-000000000001',
+      description: data.description || '',
+      short_description: data.shortDescription || null,
+      price: pricing.sellingPrice,
+      mrp: pricing.mrp,
+      stock_quantity: initialStock,
+      reserved_stock: 0,
+      low_stock_threshold: lowStockThreshold,
+      min_order_quantity: data.minOrderQuantity || 1,
+      max_order_quantity: data.maxOrderQuantity || 10,
+      tags: data.tags || [],
+      brand: data.brand || 'Jainam Traders',
+      material: data.material?.trim() || null,
+      dimensions: data.dimensions?.trim() || null,
+      weight: data.weight?.trim() || null,
+      occasion: data.occasion?.trim() || null,
+      is_featured: Boolean(data.isFeatured),
+      is_new_arrival: Boolean(data.isNewArrival),
+      is_best_seller: Boolean(data.isBestSeller),
+      is_active: isActive,
+      thumbnail_url: data.thumbnailUrl || (data.images && data.images[0]) || '/images/product-placeholder.svg',
+      images: data.images && data.images.length > 0 ? data.images : (data.thumbnailUrl ? [data.thumbnailUrl] : ['/images/product-placeholder.svg']),
+      video_url: data.videoUrl || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from('products')
+      .insert(rowToInsert)
+      .select('*, categories(name)')
+      .single();
+
+    if (insertErr) {
+      console.error('[Supabase DB Error] Product insert failed:', insertErr);
+      if (insertErr.code === '23505') {
+        throw new Error(`Duplicate product rejected by database: ${insertErr.message}`);
+      }
+      throw new Error(`Database failed to persist product: ${insertErr.message} (code: ${insertErr.code || 'UNKNOWN'})`);
+    }
+
+    const createdProduct = mapRowToProduct(inserted);
+
+    // Initial stock movement audit log in Supabase
+    if (initialStock > 0) {
+      try {
+        await supabase.from('inventory_movements').insert({
+          id: crypto.randomUUID(),
+          product_id: productId,
+          quantity_change: initialStock,
+          previous_stock: 0,
+          new_stock: initialStock,
+          reason: 'restock',
+          notes: 'Initial stock recorded on product creation',
+          actor_id: isUuid(actorId) ? actorId : null,
+          created_at: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.warn('Failed to insert initial inventory movement in Supabase:', err);
+      }
+    }
+
+    // Audit log in Supabase
+    try {
+      await supabase.from('audit_logs').insert({
+        id: crypto.randomUUID(),
+        actor_id: isUuid(actorId) ? actorId : null,
+        actor_role: 'admin',
+        action: 'CREATE_PRODUCT',
+        entity: 'products',
+        entity_id: productId,
+        metadata: {
+          name: createdProduct.name,
+          sku: createdProduct.sku,
+          price: createdProduct.price,
+          mrp: createdProduct.mrp,
+          initialStock,
+          actor: actorId,
+        },
+        created_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.warn('Failed to insert audit log in Supabase:', err);
+    }
+
+    // Keep storeDb in memory synced as well
+    storeDb.products.unshift(createdProduct);
+    return createdProduct;
+  }
+
+  // --- In-memory fallback (only used in vitest test runner) ---
   const rawSku = data.sku && data.sku.trim()
     ? data.sku.trim()
     : generateUniqueProductSku(storeDb.products, data.categoryName);
@@ -391,23 +939,12 @@ export async function createAdminProduct(
     }
   }
 
-  const pricing = validateProductPricing(data.mrp, data.price);
-  if (!pricing.isValid) {
-    throw new Error(pricing.error || 'Invalid product pricing');
-  }
-
-  const initialStock = normalizeStockNumber(data.stockQuantity, 0);
-  const lowStockThreshold = normalizeStockNumber(data.lowStockThreshold, 3);
-  const status = data.status || 'published';
-  const isArchived = status === 'archived' || Boolean(data.isArchived);
-  const isActive = isArchived ? false : data.isActive !== undefined ? data.isActive : true;
-
   const safeData = { ...data };
   delete safeData.discountPercentage;
 
   const newProduct: Product = {
     ...safeData,
-    id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    id: data.id || `c0000000-0000-0000-0000-${Math.random().toString(16).substring(2, 14).padStart(12, '0')}`,
     name: data.name,
     sku: normalizedSku,
     barcodeValue: rawBarcode,
@@ -481,6 +1018,153 @@ export async function updateAdminProduct(
   updates: Partial<Product> & { priceChangeReason?: string },
   actorId?: string
 ): Promise<Product> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    const { data: existingRow, error: fetchErr } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchErr || !existingRow) {
+      throw new Error(fetchErr ? fetchErr.message : 'Product not found');
+    }
+
+    const existing = mapRowToProduct(existingRow);
+
+    let finalSku = existing.sku;
+    let finalBarcode = existing.barcodeValue || existing.sku;
+
+    if (updates.sku && normalizeBarcodeValue(updates.sku) !== normalizeBarcodeValue(existing.sku)) {
+      const newSku = normalizeBarcodeValue(updates.sku);
+      const { data: skuClash } = await supabase
+        .from('products')
+        .select('id, name')
+        .ilike('sku', newSku)
+        .neq('id', id)
+        .limit(1);
+
+      if (skuClash && skuClash.length > 0) {
+        throw new Error(`Duplicate SKU rejected: SKU "${newSku}" already exists for product "${skuClash[0].name}".`);
+      }
+      finalSku = newSku;
+      if (!updates.barcodeValue || updates.barcodeValue === existing.sku) {
+        finalBarcode = newSku;
+      }
+    }
+
+    if (updates.barcodeValue && normalizeBarcodeValue(updates.barcodeValue) !== normalizeBarcodeValue(finalBarcode)) {
+      const newBarcode = normalizeBarcodeValue(updates.barcodeValue);
+      const { data: bcClash } = await supabase
+        .from('products')
+        .select('id, name')
+        .ilike('barcode_value', newBarcode)
+        .neq('id', id)
+        .limit(1);
+
+      if (bcClash && bcClash.length > 0) {
+        throw new Error(`Duplicate barcode rejected: Barcode "${newBarcode}" already exists for product "${bcClash[0].name}".`);
+      }
+      finalBarcode = newBarcode;
+    }
+
+    const finalPrice = updates.price !== undefined ? updates.price : existing.price;
+    const finalMrp = updates.mrp !== undefined ? updates.mrp : existing.mrp;
+
+    const pricing = validateProductPricing(finalMrp, finalPrice);
+    if (!pricing.isValid) {
+      throw new Error(pricing.error || 'Invalid product pricing');
+    }
+
+    let status = updates.status || existing.status || 'published';
+    let isArchived = Boolean(updates.isArchived ?? existing.isArchived);
+    let isActive = updates.isActive !== undefined ? updates.isActive : existing.isActive;
+
+    if (updates.status === 'archived') {
+      isArchived = true;
+      isActive = false;
+      status = 'archived';
+    } else if (updates.status === 'published') {
+      isArchived = false;
+      isActive = true;
+      status = 'published';
+    } else if (updates.status === 'hidden') {
+      isArchived = false;
+      isActive = false;
+      status = 'hidden';
+    }
+
+    const rowUpdates: Record<string, any> = {
+      name: updates.name !== undefined ? updates.name.trim() : existing.name,
+      sku: finalSku,
+      barcode_value: finalBarcode,
+      price: pricing.sellingPrice,
+      mrp: pricing.mrp,
+      is_active: isActive,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (updates.description !== undefined) rowUpdates.description = updates.description;
+    if (updates.thumbnailUrl !== undefined) rowUpdates.thumbnail_url = updates.thumbnailUrl;
+    if (updates.images !== undefined) rowUpdates.images = updates.images;
+    if (updates.tags !== undefined) rowUpdates.tags = updates.tags;
+    if (updates.brand !== undefined) rowUpdates.brand = updates.brand;
+    if (updates.manufacturerModelNumber !== undefined) rowUpdates.manufacturer_model_number = updates.manufacturerModelNumber;
+    if (updates.lowStockThreshold !== undefined) rowUpdates.low_stock_threshold = normalizeStockNumber(updates.lowStockThreshold, 3);
+    if (updates.minOrderQuantity !== undefined) rowUpdates.min_order_quantity = updates.minOrderQuantity;
+    if (updates.maxOrderQuantity !== undefined) rowUpdates.max_order_quantity = updates.maxOrderQuantity;
+    if (updates.isFeatured !== undefined) rowUpdates.is_featured = Boolean(updates.isFeatured);
+    if (updates.isNewArrival !== undefined) rowUpdates.is_new_arrival = Boolean(updates.isNewArrival);
+    if (updates.isBestSeller !== undefined) rowUpdates.is_best_seller = Boolean(updates.isBestSeller);
+    if (updates.material !== undefined) rowUpdates.material = updates.material?.trim() || null;
+    if (updates.dimensions !== undefined) rowUpdates.dimensions = updates.dimensions?.trim() || null;
+    if (updates.weight !== undefined) rowUpdates.weight = updates.weight?.trim() || null;
+    if (updates.occasion !== undefined) rowUpdates.occasion = updates.occasion?.trim() || null;
+
+    const { data: updatedRow, error: updateErr } = await supabase
+      .from('products')
+      .update(rowUpdates)
+      .eq('id', id)
+      .select('*, categories(name)')
+      .single();
+
+    if (updateErr) {
+      console.error('[Supabase DB Error] updateAdminProduct failed:', updateErr);
+      throw new Error(`Database failed to update product: ${updateErr.message}`);
+    }
+
+    const updated = mapRowToProduct(updatedRow);
+
+    // Audit log
+    try {
+      await supabase.from('audit_logs').insert({
+        id: crypto.randomUUID(),
+        actor_id: isUuid(actorId) ? actorId : null,
+        actor_role: 'admin',
+        action: 'UPDATE_PRODUCT',
+        entity: 'products',
+        entity_id: id,
+        metadata: {
+          name: updated.name,
+          sku: updated.sku,
+          price: updated.price,
+          mrp: updated.mrp,
+          status: updated.status,
+          actor: actorId,
+        },
+        created_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn('Audit log insert failed:', e);
+    }
+
+    const idx = storeDb.products.findIndex((p) => p.id === id);
+    if (idx !== -1) storeDb.products[idx] = updated;
+
+    return updated;
+  }
+
+  // --- In-memory fallback (only used in vitest test runner) ---
   const index = storeDb.products.findIndex((p) => p.id === id);
   if (index === -1) throw new Error('Product not found');
 
@@ -497,7 +1181,6 @@ export async function updateAdminProduct(
       throw new Error(`Duplicate SKU rejected: SKU "${newSku}" already exists for product "${skuCheck.conflictProduct?.name}".`);
     }
     finalSku = newSku;
-    // By default, if barcode derived from SKU, keep in sync
     if (!updates.barcodeValue || updates.barcodeValue === existing.sku) {
       finalBarcode = newSku;
     }
@@ -597,6 +1280,42 @@ export async function updateAdminProduct(
 }
 
 export async function archiveAdminProduct(id: string, actorId?: string): Promise<Product> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    const { data: row, error } = await supabase
+      .from('products')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('*, categories(name)')
+      .single();
+
+    if (error) {
+      console.error('[Supabase DB Error] archiveAdminProduct failed:', error);
+      throw new Error(`Database failed to archive product: ${error.message}`);
+    }
+
+    const prod = mapRowToProduct(row);
+    try {
+      await supabase.from('audit_logs').insert({
+        id: crypto.randomUUID(),
+        actor_id: isUuid(actorId) ? actorId : null,
+        actor_role: 'admin',
+        action: 'ARCHIVE_PRODUCT',
+        entity: 'products',
+        entity_id: id,
+        metadata: { name: prod.name, sku: prod.sku, actor: actorId },
+        created_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn('Audit log insert failed:', e);
+    }
+
+    const idx = storeDb.products.findIndex((p) => p.id === id);
+    if (idx !== -1) storeDb.products[idx] = prod;
+
+    return prod;
+  }
+
   const index = storeDb.products.findIndex((p) => p.id === id);
   if (index === -1) throw new Error('Product not found');
 
@@ -616,6 +1335,42 @@ export async function archiveAdminProduct(id: string, actorId?: string): Promise
 }
 
 export async function unarchiveAdminProduct(id: string, actorId?: string): Promise<Product> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    const { data: row, error } = await supabase
+      .from('products')
+      .update({ is_active: true, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('*, categories(name)')
+      .single();
+
+    if (error) {
+      console.error('[Supabase DB Error] unarchiveAdminProduct failed:', error);
+      throw new Error(`Database failed to unarchive product: ${error.message}`);
+    }
+
+    const prod = mapRowToProduct(row);
+    try {
+      await supabase.from('audit_logs').insert({
+        id: crypto.randomUUID(),
+        actor_id: isUuid(actorId) ? actorId : null,
+        actor_role: 'admin',
+        action: 'UNARCHIVE_PRODUCT',
+        entity: 'products',
+        entity_id: id,
+        metadata: { name: prod.name, sku: prod.sku, actor: actorId },
+        created_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn('Audit log insert failed:', e);
+    }
+
+    const idx = storeDb.products.findIndex((p) => p.id === id);
+    if (idx !== -1) storeDb.products[idx] = prod;
+
+    return prod;
+  }
+
   const index = storeDb.products.findIndex((p) => p.id === id);
   if (index === -1) throw new Error('Product not found');
 
@@ -635,16 +1390,58 @@ export async function unarchiveAdminProduct(id: string, actorId?: string): Promi
 }
 
 export async function deleteAdminProductPermanent(id: string, actorId?: string): Promise<Product> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    const { data: row, error: fetchErr } = await supabase
+      .from('products')
+      .select('*, categories(name)')
+      .eq('id', id)
+      .single();
+
+    if (fetchErr || !row) throw new Error('Product not found');
+    const prod = mapRowToProduct(row);
+
+    const { error: delErr } = await supabase
+      .from('products')
+      .delete()
+      .eq('id', id);
+
+    if (delErr) {
+      console.error('[Supabase DB Error] deleteAdminProductPermanent failed:', delErr);
+      throw new Error(`Database failed to delete product: ${delErr.message}`);
+    }
+
+    try {
+      await supabase.from('audit_logs').insert({
+        id: crypto.randomUUID(),
+        actor_id: isUuid(actorId) ? actorId : null,
+        actor_role: 'admin',
+        action: 'DELETE_PRODUCT_PERMANENT',
+        entity: 'products',
+        entity_id: id,
+        metadata: { name: prod.name, sku: prod.sku, actor: actorId },
+        created_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn('Audit log insert failed:', e);
+    }
+
+    const idx = storeDb.products.findIndex((p) => p.id === id);
+    if (idx !== -1) storeDb.products.splice(idx, 1);
+
+    return prod;
+  }
+
   const index = storeDb.products.findIndex((p) => p.id === id);
   if (index === -1) throw new Error('Product not found');
 
-  const removed = storeDb.products.splice(index, 1)[0];
-  storeDb.logAudit(actorId, 'admin', 'PERMANENT_DELETE_PRODUCT', 'products', id, {
-    name: removed.name,
-    sku: removed.sku,
+  const [deleted] = storeDb.products.splice(index, 1);
+  storeDb.logAudit(actorId, 'admin', 'DELETE_PRODUCT_PERMANENT', 'products', id, {
+    name: deleted.name,
+    sku: deleted.sku,
   });
 
-  return removed;
+  return deleted;
 }
 
 export async function adjustInventory(
@@ -655,6 +1452,75 @@ export async function adjustInventory(
   notes: string,
   actorId?: string
 ): Promise<{ product: Product; movement: InventoryMovement }> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    const { data: prodRow, error: pErr } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', productId)
+      .single();
+
+    if (pErr || !prodRow) throw new Error('Product not found');
+
+    const check = calculateStockAdjustment(Number(prodRow.stock_quantity), quantityChange);
+    if (!check.isValid) {
+      throw new Error(check.error || 'Invalid stock adjustment');
+    }
+
+    const { data: updatedRow, error: uErr } = await supabase
+      .from('products')
+      .update({ stock_quantity: check.newStock, updated_at: new Date().toISOString() })
+      .eq('id', productId)
+      .select('*, categories(name)')
+      .single();
+
+    if (uErr) {
+      console.error('[Supabase DB Error] adjustInventory failed:', uErr);
+      throw new Error(`Database failed to adjust stock: ${uErr.message}`);
+    }
+
+    const product = mapRowToProduct(updatedRow);
+
+    const movementRow = {
+      id: crypto.randomUUID(),
+      product_id: productId,
+      variant_id: variantId && isUuid(variantId) ? variantId : null,
+      quantity_change: check.change,
+      previous_stock: check.prevStock,
+      new_stock: check.newStock,
+      reason: reason === 'other' ? 'manual_correction' : reason,
+      notes,
+      actor_id: isUuid(actorId) ? actorId : null,
+      created_at: new Date().toISOString(),
+    };
+
+    const { data: movInserted } = await supabase
+      .from('inventory_movements')
+      .insert(movementRow)
+      .select()
+      .single();
+
+    const movement: InventoryMovement = {
+      id: movInserted ? movInserted.id : movementRow.id,
+      productId,
+      productName: product.name,
+      variantId,
+      quantityChange: check.change,
+      previousStock: check.prevStock,
+      newStock: check.newStock,
+      reason: reason as any,
+      notes,
+      actorId,
+      createdAt: movementRow.created_at,
+    };
+
+    const idx = storeDb.products.findIndex((p) => p.id === productId);
+    if (idx !== -1) storeDb.products[idx] = product;
+    storeDb.inventoryMovements.unshift(movement);
+
+    return { product, movement };
+  }
+
   return storeDb.withReservationLock(async () => {
     const product = storeDb.products.find((p) => p.id === productId);
     if (!product) throw new Error('Product not found');
@@ -717,6 +1583,208 @@ export interface CreateOrderParams {
 }
 
 export async function createPickupOrder(params: CreateOrderParams): Promise<Order> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    if (!params.customerId || !params.customerId.trim()) {
+      throw new Error('Customer authentication identity is required to reserve store inventory');
+    }
+    if (!params.items || params.items.length === 0) {
+      throw new Error('Order must contain at least one item');
+    }
+
+    // 0. Idempotency Check in Supabase
+    if (params.idempotencyKey && params.idempotencyKey.trim()) {
+      const { data: existingRow } = await supabase
+        .from('orders')
+        .select('*, order_items(*)')
+        .eq('idempotency_key', params.idempotencyKey.trim())
+        .maybeSingle();
+
+      if (existingRow) {
+        return mapRowToOrder(existingRow, existingRow.order_items);
+      }
+    }
+
+    // 1. Fetch products from Supabase
+    const productIds = params.items.map((i) => i.productId);
+    const { data: dbProducts, error: pErr } = await supabase
+      .from('products')
+      .select('*, product_variants(*)')
+      .in('id', productIds)
+      .eq('is_active', true);
+
+    if (pErr) {
+      console.error('[Supabase DB Error] createPickupOrder failed to fetch products:', pErr);
+      throw new Error(`Database error fetching items: ${pErr.message}`);
+    }
+
+    const prodMap = new Map((dbProducts || []).map((p) => [p.id, p]));
+    const validatedItems: ValidatedItem[] = [];
+
+    for (const item of params.items) {
+      const prod = prodMap.get(item.productId);
+      if (!prod) {
+        throw new Error(`Product ${item.productId} is no longer available or has been archived.`);
+      }
+
+      if (item.quantity < (prod.min_order_quantity || 1)) {
+        throw new Error(`Minimum order quantity for ${prod.name} is ${prod.min_order_quantity || 1}`);
+      }
+      if (item.quantity > (prod.max_order_quantity || 10)) {
+        throw new Error(`Maximum order quantity for ${prod.name} is ${prod.max_order_quantity || 10}`);
+      }
+
+      let variantName: string | undefined = undefined;
+      let unitPrice = Number(prod.price);
+
+      if (item.variantId) {
+        const variant = (prod.product_variants || []).find((v: any) => v.id === item.variantId && v.is_active);
+        if (!variant) throw new Error(`Selected variant is no longer available for ${prod.name}`);
+        variantName = variant.title;
+        if (variant.price_override) unitPrice = Number(variant.price_override);
+
+        const availableUnits = variant.stock_quantity - variant.reserved_stock;
+        if (availableUnits < item.quantity) {
+          throw new Error(`Sorry! "${prod.name} (${variantName})" is currently out of stock for pickup (Available: ${availableUnits}).`);
+        }
+      } else {
+        const availableUnits = prod.stock_quantity - prod.reserved_stock;
+        if (availableUnits < item.quantity) {
+          throw new Error(`Sorry! "${prod.name}" has only ${availableUnits} unit(s) remaining for pickup. Your requested quantity (${item.quantity}) cannot be reserved.`);
+        }
+      }
+
+      validatedItems.push({
+        productId: prod.id,
+        variantId: item.variantId,
+        productName: prod.name,
+        variantName,
+        unitPrice,
+        mrp: Number(prod.mrp),
+        quantity: item.quantity,
+        totalPrice: unitPrice * item.quantity,
+        thumbnailUrl: prod.thumbnail_url,
+      });
+    }
+
+    const rawSubtotal = validatedItems.reduce((acc, item) => acc + item.totalPrice, 0);
+
+    const discountCalc = calculateOrderDiscounts({
+      subtotal: rawSubtotal,
+      customerId: params.customerId,
+      allowStacking: true,
+    });
+
+    // Reserve stock in Supabase
+    for (const item of params.items) {
+      const prod = prodMap.get(item.productId)!;
+      if (item.variantId) {
+        const v = (prod.product_variants || []).find((vItem: any) => vItem.id === item.variantId);
+        if (v) {
+          await supabase
+            .from('product_variants')
+            .update({ reserved_stock: (v.reserved_stock || 0) + item.quantity })
+            .eq('id', item.variantId);
+        }
+      } else {
+        await supabase
+          .from('products')
+          .update({ reserved_stock: (prod.reserved_stock || 0) + item.quantity })
+          .eq('id', item.productId);
+      }
+
+      await supabase.from('inventory_movements').insert({
+        id: crypto.randomUUID(),
+        product_id: item.productId,
+        variant_id: isUuid(item.variantId) ? item.variantId : null,
+        quantity_change: item.quantity,
+        previous_stock: prod.stock_quantity,
+        new_stock: prod.stock_quantity,
+        reason: 'reservation',
+        notes: 'Reserved for customer order',
+        actor_id: isUuid(params.customerId) ? params.customerId : null,
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    const orderId = crypto.randomUUID();
+    const orderNumber = `JT-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`;
+    const qrToken = `JT-QR-${orderNumber}-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+    const reservationHours = params.reservationHours || 24;
+    const reservationExpiresAt = new Date(Date.now() + reservationHours * 60 * 60 * 1000).toISOString();
+
+    const orderRow = {
+      id: orderId,
+      order_number: orderNumber,
+      idempotency_key: params.idempotencyKey || null,
+      customer_id: isUuid(params.customerId) ? params.customerId : 'a0000000-0000-0000-0000-000000000001',
+      customer_name: params.customerName,
+      customer_phone: params.customerPhone,
+      customer_email: params.customerEmail || null,
+      status: 'PENDING',
+      payment_status: 'UNPAID',
+      payment_method: 'Pay at Shop',
+      subtotal: discountCalc.subtotal,
+      discount: discountCalc.couponDiscount,
+      total_amount: discountCalc.netPayableAtCounter,
+      coupon_code: params.couponCode || null,
+      gift_code: null,
+      gift_code_discount: 0,
+      amount_due: discountCalc.netPayableAtCounter,
+      amount_received: 0,
+      pickup_mode: params.pickupMode || 'FLEXIBLE',
+      pickup_slot_date: params.pickupSlotDate || null,
+      pickup_slot_time: params.pickupSlotTime || null,
+      customer_notes: params.customerNotes || null,
+      qr_token: qrToken,
+      reservation_expires_at: reservationExpiresAt,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data: insertedOrder, error: oErr } = await supabase
+      .from('orders')
+      .insert(orderRow)
+      .select()
+      .single();
+
+    if (oErr) {
+      console.error('[Supabase DB Error] Insert order failed:', oErr);
+      throw new Error(`Database failed to persist order: ${oErr.message}`);
+    }
+
+    const orderItemRows = validatedItems.map((v) => ({
+      id: crypto.randomUUID(),
+      order_id: orderId,
+      product_id: v.productId,
+      variant_id: isUuid(v.variantId) ? v.variantId : null,
+      product_name: v.productName,
+      variant_name: v.variantName || null,
+      unit_price: v.unitPrice,
+      mrp: v.mrp,
+      quantity: v.quantity,
+      total_price: v.totalPrice,
+      thumbnail_url: v.thumbnailUrl || null,
+      created_at: new Date().toISOString(),
+    }));
+
+    await supabase.from('order_items').insert(orderItemRows);
+
+    await supabase.from('order_status_history').insert({
+      id: crypto.randomUUID(),
+      order_id: orderId,
+      from_status: null,
+      to_status: 'PENDING',
+      note: 'Order placed by customer for pickup at Jainam Traders counter.',
+      changed_by: isUuid(params.customerId) ? params.customerId : null,
+      created_at: new Date().toISOString(),
+    });
+
+    const fullOrder = mapRowToOrder(insertedOrder, orderItemRows);
+    storeDb.orders.unshift(fullOrder);
+    return fullOrder;
+  }
+
   // Execute within concurrency reservation lock to guarantee no double-booking of last unit
   return storeDb.withReservationLock(async () => {
     // 0. Idempotency Check: if identical request key already exists, return existing order
@@ -1080,6 +2148,115 @@ export async function transitionOrderStatus(
   actorId?: string,
   note?: string
 ): Promise<Order> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    let query = supabase
+      .from('orders')
+      .select('*, order_items(*)')
+      .limit(1);
+
+    if (isUuid(orderId)) {
+      query = query.or(`id.eq.${orderId},order_number.eq.${orderId}`);
+    } else {
+      query = query.eq('order_number', orderId);
+    }
+
+    const { data: rows, error: fErr } = await query;
+    if (fErr || !rows || rows.length === 0) throw new Error('Order not found');
+
+    const rawOrder = rows[0];
+    const order = mapRowToOrder(rawOrder, rawOrder.order_items);
+    const check = canTransitionOrder(order.status, nextStatus, actorRole);
+    if (!check.allowed) {
+      throw new Error(check.reason || 'Invalid order status transition');
+    }
+
+    const previousStatus = order.status;
+    const nowIso = new Date().toISOString();
+
+    const orderUpdates: Record<string, any> = {
+      status: nextStatus,
+      updated_at: nowIso,
+    };
+
+    if (nextStatus === 'CANCELLED' || nextStatus === 'EXPIRED') {
+      for (const item of order.items) {
+        const { data: prodRow } = await supabase.from('products').select('stock_quantity, reserved_stock').eq('id', item.productId).single();
+        if (prodRow) {
+          const newReserved = Math.max(0, (prodRow.reserved_stock || 0) - item.quantity);
+          await supabase.from('products').update({ reserved_stock: newReserved }).eq('id', item.productId);
+          await supabase.from('inventory_movements').insert({
+            id: crypto.randomUUID(),
+            product_id: item.productId,
+            quantity_change: item.quantity,
+            previous_stock: prodRow.stock_quantity,
+            new_stock: prodRow.stock_quantity,
+            reason: 'release_reservation',
+            order_id: isUuid(order.id) ? order.id : null,
+            notes: `Released reservation upon order ${nextStatus.toLowerCase()} (${order.orderNumber})`,
+            actor_id: isUuid(actorId) ? actorId : null,
+            created_at: nowIso,
+          });
+        }
+      }
+    } else if (nextStatus === 'PICKED_UP') {
+      orderUpdates.payment_status = 'PAID';
+      orderUpdates.amount_received = order.totalAmount;
+      orderUpdates.amount_due = 0;
+      orderUpdates.payment_recorded_at = nowIso;
+      orderUpdates.payment_recorded_by = isUuid(actorId) ? actorId : null;
+
+      for (const item of order.items) {
+        const { data: prodRow } = await supabase.from('products').select('stock_quantity, reserved_stock').eq('id', item.productId).single();
+        if (prodRow) {
+          const newStock = Math.max(0, (prodRow.stock_quantity || 0) - item.quantity);
+          const newReserved = Math.max(0, (prodRow.reserved_stock || 0) - item.quantity);
+          await supabase.from('products').update({ stock_quantity: newStock, reserved_stock: newReserved }).eq('id', item.productId);
+          await supabase.from('inventory_movements').insert({
+            id: crypto.randomUUID(),
+            product_id: item.productId,
+            quantity_change: -item.quantity,
+            previous_stock: prodRow.stock_quantity,
+            new_stock: newStock,
+            reason: 'sale',
+            order_id: isUuid(order.id) ? order.id : null,
+            notes: `Finalized pickup at counter for order ${order.orderNumber}`,
+            actor_id: isUuid(actorId) ? actorId : null,
+            created_at: nowIso,
+          });
+        }
+      }
+    }
+
+    const { data: updatedRow, error: uErr } = await supabase
+      .from('orders')
+      .update(orderUpdates)
+      .eq('id', rawOrder.id)
+      .select('*, order_items(*)')
+      .single();
+
+    if (uErr) {
+      console.error('[Supabase DB Error] transitionOrderStatus failed:', uErr);
+      throw new Error(`Database failed to transition order: ${uErr.message}`);
+    }
+
+    await supabase.from('order_status_history').insert({
+      id: crypto.randomUUID(),
+      order_id: rawOrder.id,
+      from_status: previousStatus,
+      to_status: nextStatus,
+      note: note || `Status transitioned to ${nextStatus}`,
+      changed_by: isUuid(actorId) ? actorId : null,
+      created_at: nowIso,
+    });
+
+    const updatedOrder = mapRowToOrder(updatedRow, updatedRow.order_items);
+    const localIdx = storeDb.orders.findIndex((o) => o.id === rawOrder.id || o.orderNumber === rawOrder.order_number);
+    if (localIdx !== -1) storeDb.orders[localIdx] = updatedOrder;
+
+    return updatedOrder;
+  }
+
   return storeDb.withReservationLock(async () => {
     const order = storeDb.orders.find((o) => o.id === orderId || o.orderNumber === orderId);
     if (!order) throw new Error('Order not found');
@@ -1299,6 +2476,43 @@ export async function updateOrderAdminNotes(
  * 7. ORDER QUERY METHODS
  */
 export async function getOrders(params?: { customerId?: string; status?: OrderStatus; search?: string }): Promise<Order[]> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    let query = supabase
+      .from('orders')
+      .select('*, order_items(*)')
+      .order('created_at', { ascending: false });
+
+    if (params?.customerId && isUuid(params.customerId)) {
+      query = query.eq('customer_id', params.customerId);
+    }
+    if (params?.status) {
+      query = query.eq('status', params.status);
+    }
+
+    const { data: rows, error } = await query;
+    if (error) {
+      if (error.code === 'PGRST205') {
+        console.warn('[Supabase DB Warning] Table "orders" does not exist yet. Returning 0 orders.');
+        return [];
+      }
+      console.error('[Supabase DB Error] getOrders failed:', error);
+      throw new Error(`Database failed to fetch orders: ${error.message}`);
+    }
+
+    let orders = (rows || []).map((r) => mapRowToOrder(r, r.order_items));
+    if (params?.search && params.search.trim()) {
+      const q = params.search.toLowerCase().trim();
+      orders = orders.filter(
+        (o) =>
+          o.orderNumber.toLowerCase().includes(q) ||
+          o.customerName.toLowerCase().includes(q) ||
+          o.customerPhone.includes(q)
+      );
+    }
+    return orders;
+  }
+
   let list = storeDb.orders;
   if (params?.customerId) {
     list = list.filter((o) => o.customerId === params.customerId);
@@ -1319,10 +2533,51 @@ export async function getOrders(params?: { customerId?: string; status?: OrderSt
 }
 
 export async function getOrderByNumber(orderNumber: string): Promise<Order | null> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    let query = supabase
+      .from('orders')
+      .select('*, order_items(*)')
+      .limit(1);
+
+    if (isUuid(orderNumber)) {
+      query = query.or(`order_number.eq.${orderNumber},id.eq.${orderNumber}`);
+    } else {
+      query = query.eq('order_number', orderNumber);
+    }
+
+    const { data: rows, error } = await query;
+    if (error) {
+      if (error.code === 'PGRST205') return null;
+      console.error('[Supabase DB Error] getOrderByNumber failed:', error);
+      throw new Error(`Database failed to fetch order: ${error.message}`);
+    }
+
+    if (!rows || rows.length === 0) return null;
+    return mapRowToOrder(rows[0], rows[0].order_items);
+  }
+
   return storeDb.orders.find((o) => o.orderNumber === orderNumber || o.id === orderNumber) || null;
 }
 
 export async function getOrderByQrToken(qrToken: string): Promise<Order | null> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    const { data: rows, error } = await supabase
+      .from('orders')
+      .select('*, order_items(*)')
+      .eq('qr_token', qrToken)
+      .limit(1);
+
+    if (error) {
+      console.error('[Supabase DB Error] getOrderByQrToken failed:', error);
+      throw new Error(`Database failed to query QR token: ${error.message}`);
+    }
+
+    if (!rows || rows.length === 0) return null;
+    return mapRowToOrder(rows[0], rows[0].order_items);
+  }
+
   return storeDb.orders.find((o) => o.qrToken === qrToken) || null;
 }
 
@@ -1858,6 +3113,56 @@ export interface RecordPaymentParams {
  * Pay at Shop is the authoritative payment method.
  */
 export async function recordOrderPayment(params: RecordPaymentParams): Promise<Order> {
+  if (shouldUseSupabase()) {
+    const supabase = getSupabaseAdminClient();
+    let query = supabase.from('orders').select('*, order_items(*)').limit(1);
+    if (isUuid(params.orderId)) {
+      query = query.or(`id.eq.${params.orderId},order_number.eq.${params.orderId}`);
+    } else {
+      query = query.eq('order_number', params.orderId);
+    }
+
+    const { data: rows, error: fErr } = await query;
+    if (fErr || !rows || rows.length === 0) throw new Error(`Order ${params.orderId} not found`);
+
+    const rawOrder = rows[0];
+    const order = mapRowToOrder(rawOrder, rawOrder.order_items);
+
+    if (params.amountReceived <= 0) throw new Error('Payment amount must be greater than zero');
+
+    const currentReceived = order.amountReceived || 0;
+    const newTotalReceived = currentReceived + params.amountReceived;
+    const totalPayable = order.totalAmount;
+    let newStatus: PaymentStatus = 'PARTIALLY_PAID';
+    if (newTotalReceived >= totalPayable) newStatus = 'PAID';
+
+    const nowIso = new Date().toISOString();
+    const { data: updatedRow, error: uErr } = await supabase
+      .from('orders')
+      .update({
+        amount_received: newTotalReceived,
+        amount_due: Math.max(0, totalPayable - newTotalReceived),
+        payment_status: newStatus,
+        payment_recorded_at: nowIso,
+        payment_recorded_by: isUuid(params.staffId) ? params.staffId : null,
+        updated_at: nowIso,
+      })
+      .eq('id', rawOrder.id)
+      .select('*, order_items(*)')
+      .single();
+
+    if (uErr) {
+      console.error('[Supabase DB Error] recordOrderPayment failed:', uErr);
+      throw new Error(`Database failed to record payment: ${uErr.message}`);
+    }
+
+    const updatedOrder = mapRowToOrder(updatedRow, updatedRow.order_items);
+    const localIdx = storeDb.orders.findIndex((o) => o.id === rawOrder.id || o.orderNumber === rawOrder.order_number);
+    if (localIdx !== -1) storeDb.orders[localIdx] = updatedOrder;
+
+    return updatedOrder;
+  }
+
   return storeDb.withReservationLock(async () => {
     const order = storeDb.orders.find((o) => o.id === params.orderId || o.orderNumber === params.orderId);
     if (!order) {

@@ -4,6 +4,9 @@ import { OrderStatus } from '@/lib/types';
 import { getAuthenticatedStaffFromRequest } from '@/lib/auth/server-guard';
 import { getAuthenticatedCustomer } from '@/lib/auth/customer-auth-server';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -16,7 +19,11 @@ export async function GET(request: NextRequest) {
     // If staff session is present, allow querying global orders or specific customer
     if (staffSession) {
       const orders = await getOrders({ customerId, status, search });
-      return NextResponse.json({ orders });
+      return NextResponse.json({ orders }, {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        },
+      });
     }
 
     // Customer Session isolation check
